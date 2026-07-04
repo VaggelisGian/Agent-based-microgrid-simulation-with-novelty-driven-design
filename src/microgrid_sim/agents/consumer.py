@@ -42,6 +42,14 @@ class Consumer(mesa.Agent):
         self.last_demand_kwh = 0.0
         self.last_net_import_kwh = 0.0
         self.last_billed_eur = 0.0
+        # Phase 3 (D6): the broker id this agent was actually billed under THIS
+        # step, captured before _update_inertia_and_maybe_switch below can
+        # mutate self.broker for the NEXT step. MicrogridModel.step groups
+        # per-broker customer contributions by this field (not by self.broker,
+        # which may already reflect a same-step switch by the time the model
+        # reads it), so a broker's contribution to a step's feeder peak is
+        # attributed to the broker that actually served that step's demand.
+        self.last_broker_id = initial_broker.id
 
     def step(self) -> None:
         hour = self.model.current_hour
@@ -55,6 +63,7 @@ class Consumer(mesa.Agent):
         self.last_demand_kwh = demand_kwh
         self.last_net_import_kwh = net_import_kwh
         self.last_billed_eur = billed_eur
+        self.last_broker_id = self.broker.id
 
         if self.model.switching_enabled:
             self._update_inertia_and_maybe_switch(price)
