@@ -47,32 +47,17 @@ class Prosumer(Consumer):
         self.total_demand_kwh = 0.0
         self.total_grid_import_kwh = 0.0
 
-    def _capacity_release_fraction(self) -> float:
-        """Phase 3 (D6): fraction of the otherwise-withheld D3 reserve this
-        prosumer releases this step, driven purely by its own broker's
-        CURRENT surcharge (carried over from the previous step; zero under
-        capacity_disabled, capacity_pnl_only, or a below-threshold hour, and
-        always zero while the model has no capacity mechanism at all). Reads
-        model state defensively (getattr with an empty-dict / None default) so
-        this is inert, not an AttributeError, against any host object (e.g. a
-        test harness) that does not carry capacity-mechanism state -- which is
-        exactly the "surcharge 0 -> unchanged D3 dispatch" baseline-preserving
-        behaviour this mechanism must have by construction. Forecast-free,
-        deterministic, draws no RNG.
-        """
-        broker_surcharges = getattr(self.model, "broker_surcharges", None)
-        if not broker_surcharges:
-            return 0.0
-        surcharge = broker_surcharges.get(self.broker.id, 0.0)
-        if surcharge <= 0.0:
-            return 0.0
-        response_reference = getattr(self.model, "capacity_response_reference_eur_per_kwh", 0.0)
-        if not response_reference:
-            return 0.0
-        release = surcharge / response_reference
-        return min(max(release, 0.0), 1.0)
-
     def _compute_net_import_kwh(self, hour: int, demand_kwh: float) -> float:
+        """Pure D3 reactive dispatch: charge from surplus PV, discharge to
+        cover local demand, holding back a fixed evening reserve until
+        evening_reserve_hour. No price signal, no forecast, no optimization.
+        (Phase 3's D6 scarcity-triggered early reserve-release has been
+        removed per D7: the physical channel to metric 3 is now the
+        price-elastic demand deferral applied to `demand_kwh` upstream, in
+        Consumer._apply_demand_deferral, BEFORE this dispatch runs -- so
+        `demand_kwh` here is already the post-deferral served demand, not raw
+        base demand, but the dispatch logic itself is unmodified D3.)
+        """
         pv_kwh = self.model.solar_profile[hour] * self.pv_capacity_kwp
         hour_of_day = hour % 24
 
@@ -86,16 +71,7 @@ class Prosumer(Consumer):
             deficit_kwh = demand_kwh - pv_kwh
             if hour_of_day < self.evening_reserve_hour:
                 reserve_kwh = self.reserve_fraction * self.battery_capacity_kwh
-                normal_dischargeable_kwh = max(0.0, self.battery_soc_kwh - reserve_kwh)
-                # Phase 3 (D6) storage response: a positive surcharge releases
-                # a proportional fraction of the reserve energy actually held
-                # in the battery (bounded by what is really there), on top of
-                # the normal (unchanged) dischargeable amount. When surcharge
-                # is 0 this is exactly 0.0, so normal_dischargeable_kwh alone
-                # is used and the D3 baseline dispatch is preserved exactly.
-                withheld_kwh = max(0.0, min(self.battery_soc_kwh, reserve_kwh))
-                released_kwh = self._capacity_release_fraction() * withheld_kwh
-                dischargeable_kwh = normal_dischargeable_kwh + released_kwh
+                dischargeable_kwh = max(0.0, self.battery_soc_kwh - reserve_kwh)
             else:
                 dischargeable_kwh = self.battery_soc_kwh
             # Bounded by the prosumer's own deficit: this is self-consumption

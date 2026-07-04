@@ -133,13 +133,21 @@ class MicrogridModel(mesa.Model):
         self.capacity_feedback_pnl = capacity_cfg.get("feedback_pnl", False)
         self.capacity_feedback_pricing = capacity_cfg.get("feedback_pricing", False)
         self.capacity_response_reference_eur_per_kwh = capacity_cfg.get("response_reference_eur_per_kwh", 0.0)
+        # Phase 3b (D7): price-elastic demand-deferral coefficients, the
+        # current physical channel to metric 3 (replaces D6's prosumer
+        # storage response). Both default to 0.0 when the block/keys are
+        # absent, which -- combined with broker_surcharges staying all-zero
+        # whenever the mechanism is off -- keeps deferral inert by
+        # construction, not merely by convention.
+        self.capacity_deferrable_fraction = capacity_cfg.get("deferrable_fraction", 0.0)
+        self.capacity_payback_cap_fraction = capacity_cfg.get("payback_cap_fraction", 0.0)
 
         # Carried-over, per-broker NEXT-step surcharge (pricing channel only).
         # Always present (even when disabled) and always all-zero unless the
         # pricing feedback channel is both enabled and has actually computed a
-        # positive surcharge, so Prosumer._capacity_release_fraction reading
-        # this dict is unconditionally safe and unconditionally inert when the
-        # mechanism is off.
+        # positive surcharge, so Consumer._apply_demand_deferral (shared by
+        # Prosumer) reading this dict is unconditionally safe and
+        # unconditionally inert when the mechanism is off.
         self.broker_surcharges: dict[str, float] = {broker_id: 0.0 for broker_id in self.brokers}
 
         # Audit accumulators for the "mean surcharge per broker" metric: the
@@ -251,15 +259,17 @@ class MicrogridModel(mesa.Model):
             self._surcharge_accum[broker_id] += surcharge
         self._surcharge_steps += 1
 
-        # Step 2: agents act. Prosumers read their broker's current surcharge
-        # (self.broker_surcharges, just applied above) to run the storage
-        # response; consumers are unchanged. Each agent's last_broker_id
-        # records which broker actually served it THIS step, even if it
-        # switches broker at the tail end of its own step() call.
+        # Step 2: agents act. Every agent (consumer AND prosumer, via the
+        # shared Consumer._apply_demand_deferral) reads its own broker's
+        # current surcharge (self.broker_surcharges, just applied above) to
+        # run the D7 price-elastic demand-deferral channel BEFORE a
+        # prosumer's unmodified D3 PV/battery dispatch. Each agent's
+        # last_broker_id records which broker actually served it THIS step,
+        # even if it switches broker at the tail end of its own step() call.
         self.agents.shuffle_do("step")
 
-        # Step 3: this step's ACTUAL (post-storage-response) feeder net
-        # import; metric 3 is computed from this same history, unchanged.
+        # Step 3: this step's ACTUAL (post-deferral) feeder net import;
+        # metric 3 is computed from this same history, unchanged.
         feeder_net_import_kwh = sum(agent.last_net_import_kwh for agent in self.agents)
         self.feeder_net_import_history.append(feeder_net_import_kwh)
 
