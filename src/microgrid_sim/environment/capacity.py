@@ -82,7 +82,7 @@ class CapacityMechanism:
     def step(self, feeder_net_import_kwh: float, broker_contributions_kwh: dict) -> CapacityStepResult:
         """Advance the mechanism by one hourly step.
 
-        feeder_net_import_kwh: the ACTUAL (post-storage-response) feeder net
+        feeder_net_import_kwh: the ACTUAL (post-demand-deferral) feeder net
         import for this step (sum over all agents of demand minus PV minus
         battery discharge).
         broker_contributions_kwh: mapping broker_id -> the SIGNED sum of net

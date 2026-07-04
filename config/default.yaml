@@ -84,10 +84,18 @@ capacity_mechanism:
   # contribution SHARE into a next-step EUR/kWh price adder. This is NOT a
   # EUR/kWh tariff rate; do not read it as one.
   capacity_passthrough: 0.10
-  # Reference surcharge magnitude (EUR/kWh) against which a prosumer's own
-  # broker surcharge is compared to size its early reserve release (D3
-  # coupling); a representative structural scale, not tuned.
+  # D7: reference surcharge magnitude (EUR/kWh) against which an agent's own
+  # broker surcharge is compared (clipped to [0, 1]) to size how much of its
+  # deferrable demand actually gets deferred this hour; a representative
+  # structural scale, held fixed across the sweep, not tuned to any outcome.
   response_reference_eur_per_kwh: 0.05
+  # D7 (Phase 3b): price-elastic intra-day demand-deferral coefficients --
+  # the current physical channel to metric 3 (replaces D6's prosumer storage
+  # response, removed; see docs/DECISIONS.md's D7 entry). Both are
+  # representative structural coefficients, held FIXED across the Phase 5
+  # sweep, never tuned to a metric-3 target.
+  deferrable_fraction: 0.2 # fraction of an agent's hourly base demand eligible to be deferred
+  payback_cap_fraction: 0.5 # bounds the repayment rate: at most this fraction of an hour's base demand can be repaid in one hour
 
 data:
   solar_profile_path: data/samples/solar_thessaloniki_hourly.csv

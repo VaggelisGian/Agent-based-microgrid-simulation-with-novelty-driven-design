@@ -79,14 +79,23 @@ _CAPACITY_MECHANISM_KEYS = (
     "charge_rate_eur_per_kwh",
     "capacity_passthrough",
     "response_reference_eur_per_kwh",
+    # Phase 3b (D7): price-elastic demand-deferral coefficients.
+    "deferrable_fraction",
+    "payback_cap_fraction",
 )
 _CAPACITY_MECHANISM_BOOL_KEYS = ("enabled", "feedback_pnl", "feedback_pricing")
 _CAPACITY_MECHANISM_NONNEGATIVE_NUMERIC_KEYS = (
     "k",
     "charge_rate_eur_per_kwh",
     "capacity_passthrough",
-    "response_reference_eur_per_kwh",
 )
+# Phase 3b (D7): response_reference_eur_per_kwh is a divisor in the deferral
+# clip formula (surcharge / response_reference), so it must be strictly
+# positive, not merely non-negative (tightened from the pre-D7 bound).
+_CAPACITY_MECHANISM_POSITIVE_NUMERIC_KEYS = ("response_reference_eur_per_kwh",)
+# Phase 3b (D7): fractions of base demand / of the deferred bucket, each
+# must lie within [0, 1].
+_CAPACITY_MECHANISM_FRACTION_KEYS = ("deferrable_fraction", "payback_cap_fraction")
 
 
 class ConfigError(ValueError):
@@ -250,3 +259,13 @@ def _validate_capacity_mechanism(config: dict) -> None:
         value = capacity[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ConfigError(f"capacity_mechanism.{key} must be a non-negative number")
+
+    for key in _CAPACITY_MECHANISM_POSITIVE_NUMERIC_KEYS:
+        value = capacity[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ConfigError(f"capacity_mechanism.{key} must be a positive number")
+
+    for key in _CAPACITY_MECHANISM_FRACTION_KEYS:
+        value = capacity[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0.0 <= value <= 1.0):
+            raise ConfigError(f"capacity_mechanism.{key} must be within [0, 1]")

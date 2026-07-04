@@ -1,9 +1,9 @@
 # Capacity-mechanism ablation 2 of 4: ledger-debit (P&L) channel only. The
 # scarcity charge is levied and debited to each broker's ledger in proportion
 # to its customers' contribution to the peak, but no surcharge is written
-# into next-step quotes, so the storage response (D3 coupling) never
-# activates and this ablation cannot move metric 3 by construction -- only
-# broker economics change (docs/DECISIONS.md's D6 entry).
+# into next-step quotes, so the price-elastic demand-deferral channel (D7)
+# never activates and this ablation cannot move metric 3 by construction --
+# only broker economics change (docs/DECISIONS.md's D6/D7 entries).
 extends: ../default.yaml
 
 scenario_name: capacity_pnl_only
