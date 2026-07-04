@@ -33,6 +33,14 @@ class Broker:
         # numerator and denominator share the same energy scope (F1 fix, see
         # docs/DECISIONS.md observation note).
         self.cumulative_net_energy_kwh = 0.0
+        # Phase 3 (D6): total capacity-charge allocation debited to this
+        # broker's ledger over the run, via the capacity_feedback_pnl channel
+        # only. Deliberately a SEPARATE accumulator from cumulative_revenue_eur
+        # (which is sales revenue collected from customers, possibly already
+        # inflated by the OTHER, independent pricing-surcharge channel), so
+        # the two channels' effects can be attributed separately and the
+        # existing cost metric's scope is not corrupted by this addition.
+        self.cumulative_capacity_charge_eur = 0.0
 
     def quote(self, hour: int, context: dict | None = None) -> float:
         raise NotImplementedError
@@ -80,6 +88,13 @@ class Broker:
         self.cumulative_energy_served_kwh += max(energy_kwh, 0.0)
         self.cumulative_net_energy_kwh += energy_kwh
         self.cumulative_revenue_eur += price_eur_per_kwh * energy_kwh
+
+    def debit_capacity_charge(self, amount_eur: float) -> None:
+        """Phase 3 (D6), capacity_feedback_pnl channel: reduce this broker's
+        P&L by its allocated share of a step's scarcity charge. Pure
+        accounting -- does not touch cumulative_revenue_eur (sales revenue)
+        or write anything into prices; see cumulative_capacity_charge_eur."""
+        self.cumulative_capacity_charge_eur += amount_eur
 
 
 def seasonal_flat_price(base: float, amplitude: float, day_of_year: int, peak_day: int) -> float:

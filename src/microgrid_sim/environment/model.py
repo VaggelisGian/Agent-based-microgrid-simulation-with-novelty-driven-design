@@ -13,6 +13,7 @@ from microgrid_sim.brokers.regulated_utility import RegulatedUtilityBroker
 from microgrid_sim.brokers.volatile_low_cost import VolatileLowCostBroker
 from microgrid_sim.data.loaders import load_profiles
 from microgrid_sim.environment import metrics as metrics_module
+from microgrid_sim.environment.capacity import CapacityMechanism
 
 _BROKER_BUILDERS = {}  # populated below, keyed by config "type"
 
@@ -116,7 +117,45 @@ class MicrogridModel(mesa.Model):
         self.demand_source = profiles.demand_source
 
         self.brokers = self._build_brokers(config["brokers"])
+        self._build_capacity_mechanism(config)
         self._build_population(config)
+
+    def _build_capacity_mechanism(self, config: dict) -> None:
+        """Phase 3 (D6): set up the optional, additive, OFF-by-default capacity
+        mechanism. capacity_mechanism absent from config is equivalent to it
+        being present with enabled: false (see config/loader.py's
+        _validate_capacity_mechanism); either way the model must reproduce the
+        plain baseline byte-for-byte, so nothing here is allowed to alter any
+        RNG draw or any arithmetic when disabled.
+        """
+        capacity_cfg = config.get("capacity_mechanism", {})
+        self.capacity_enabled = capacity_cfg.get("enabled", False)
+        self.capacity_feedback_pnl = capacity_cfg.get("feedback_pnl", False)
+        self.capacity_feedback_pricing = capacity_cfg.get("feedback_pricing", False)
+        self.capacity_response_reference_eur_per_kwh = capacity_cfg.get("response_reference_eur_per_kwh", 0.0)
+
+        # Carried-over, per-broker NEXT-step surcharge (pricing channel only).
+        # Always present (even when disabled) and always all-zero unless the
+        # pricing feedback channel is both enabled and has actually computed a
+        # positive surcharge, so Prosumer._capacity_release_fraction reading
+        # this dict is unconditionally safe and unconditionally inert when the
+        # mechanism is off.
+        self.broker_surcharges: dict[str, float] = {broker_id: 0.0 for broker_id in self.brokers}
+
+        # Audit accumulators for the "mean surcharge per broker" metric: the
+        # surcharge ACTUALLY applied to each step's quote (post-ablation-gate),
+        # not the mechanism's raw internal computation.
+        self._surcharge_accum: dict[str, float] = {broker_id: 0.0 for broker_id in self.brokers}
+        self._surcharge_steps = 0
+
+        self._capacity: CapacityMechanism | None = None
+        if self.capacity_enabled:
+            self._capacity = CapacityMechanism(
+                window=capacity_cfg.get("window", 168),
+                k=capacity_cfg.get("k", 1.0),
+                charge_rate_eur_per_kwh=capacity_cfg.get("charge_rate_eur_per_kwh", 0.15),
+                capacity_passthrough=capacity_cfg.get("capacity_passthrough", 0.10),
+            )
 
     def _build_brokers(self, broker_configs: list[dict]) -> dict:
         regulated_base_eur_per_kwh = None
@@ -197,12 +236,52 @@ class MicrogridModel(mesa.Model):
     def step(self) -> None:
         hour = self.current_hour
         context: dict = {}
-        self.current_prices = {broker_id: broker.quote(hour, context) for broker_id, broker in self.brokers.items()}
+        # Step 1 (D6 order of operations): brokers quote exactly as before (the
+        # volatile broker draws exactly one shock regardless, so the RNG
+        # stream is identical across all four ablations); each broker's
+        # surcharge CARRIED OVER from the previous step (pricing channel only;
+        # all-zero otherwise) is added on top afterwards, never inside quote().
+        base_prices = {broker_id: broker.quote(hour, context) for broker_id, broker in self.brokers.items()}
+        applied_surcharges = dict(self.broker_surcharges)
+        self.current_prices = {
+            broker_id: base_prices[broker_id] + applied_surcharges.get(broker_id, 0.0)
+            for broker_id in self.brokers
+        }
+        for broker_id, surcharge in applied_surcharges.items():
+            self._surcharge_accum[broker_id] += surcharge
+        self._surcharge_steps += 1
 
+        # Step 2: agents act. Prosumers read their broker's current surcharge
+        # (self.broker_surcharges, just applied above) to run the storage
+        # response; consumers are unchanged. Each agent's last_broker_id
+        # records which broker actually served it THIS step, even if it
+        # switches broker at the tail end of its own step() call.
         self.agents.shuffle_do("step")
 
+        # Step 3: this step's ACTUAL (post-storage-response) feeder net
+        # import; metric 3 is computed from this same history, unchanged.
         feeder_net_import_kwh = sum(agent.last_net_import_kwh for agent in self.agents)
         self.feeder_net_import_history.append(feeder_net_import_kwh)
+
+        if self.capacity_enabled:
+            broker_contributions_kwh = {broker_id: 0.0 for broker_id in self.brokers}
+            for agent in self.agents:
+                broker_contributions_kwh[agent.last_broker_id] += agent.last_net_import_kwh
+
+            # Step 4: threshold, excess, total charge, allocations.
+            result = self._capacity.step(feeder_net_import_kwh, broker_contributions_kwh)
+
+            # Step 5: P&L channel, independently ablatable.
+            if self.capacity_feedback_pnl:
+                for broker_id, allocation_eur in result.allocations_eur.items():
+                    self.brokers[broker_id].debit_capacity_charge(allocation_eur)
+
+            # Step 6: pricing channel, independently ablatable; else the
+            # next-step surcharges are explicitly zero.
+            if self.capacity_feedback_pricing:
+                self.broker_surcharges = dict(result.surcharges_eur_per_kwh)
+            else:
+                self.broker_surcharges = {broker_id: 0.0 for broker_id in self.brokers}
 
         self.current_hour += 1
 
