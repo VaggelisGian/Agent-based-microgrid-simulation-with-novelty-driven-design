@@ -1,0 +1,20 @@
+# Single regulated monopoly baseline. Reuses every default.yaml value (population,
+# agent parameter distributions, data paths, prosumer dispatch rule) and overrides
+# only the broker set (one regulated broker) and switching (disabled: with a single
+# broker there is nothing to switch to, but the flag also makes "no switching" an
+# explicit, tested guarantee rather than an emergent accident).
+extends: ../default.yaml
+
+scenario_name: monopoly_baseline
+
+switching:
+  enabled: false
+
+brokers:
+  - id: regulated_utility
+    type: regulated_utility
+    name: "Regulated Utility"
+    greenness: 0.30
+    base_eur_per_kwh: 0.19
+    seasonal_amplitude_eur_per_kwh: 0.02
+    seasonal_peak_day: 15

@@ -1,0 +1,95 @@
+# Competitive three-broker scenario (frame constants per docs/DECISIONS.md).
+#
+# Calibration policy: every EUR/kWh number below is a representative recent
+# anchor from a named public source, not a fitted parameter. Effects of
+# broker competition are reported as observed outcomes of the simulation,
+# never tuned to produce a desired effect (see docs/PROJECT_CONTEXT.md).
+
+scenario_name: competitive_three_broker
+
+simulation:
+  horizon_hours: 8760 # one year, hourly resolution (frame constant)
+  seed: 20260704 # fixed for reproducibility; arbitrary, not tuned
+
+population:
+  num_agents: 200
+  prosumer_fraction: 0.2 # prosumers are a minority of the population (frame constant)
+  profile_mix:
+    price_sensitive: 0.4
+    stability_oriented: 0.3
+    green_preferring: 0.3
+
+switching:
+  enabled: true # D1: agents may reconsider broker choice under sustained tolerance breach
+
+# D4: per-agent parameters sampled uniformly (integers for hour counts) from these
+# bounded ranges using the model's seeded RNG, instead of a few fixed archetypes.
+agent_parameters:
+  demand_scale:
+    min: 0.6
+    max: 1.6
+  price_tolerance_eur_per_kwh:
+    min: 0.18
+    max: 0.32
+  volatility_tolerance_eur_per_kwh:
+    min: 0.01
+    max: 0.05
+  greenness_threshold:
+    min: 0.35
+    max: 0.75
+  switching_penalty_eur_per_kwh:
+    min: 0.003
+    max: 0.02
+  sustained_breach_hours:
+    min: 12
+    max: 96
+  prosumer_pv_capacity_kwp:
+    min: 1.5
+    max: 4.5
+  prosumer_battery_capacity_kwh:
+    min: 4.0
+    max: 12.0
+
+# D3: fixed (not sampled) reactive-dispatch parameters shared by all prosumers.
+prosumer_dispatch:
+  reserve_fraction: 0.2
+  evening_reserve_hour: 18
+
+data:
+  solar_profile_path: data/samples/solar_thessaloniki_hourly.csv
+  demand_profile_path: data/samples/residential_demand_thessaloniki_hourly.csv
+  solar_lat: 40.64 # Thessaloniki
+  solar_lon: 22.95
+  reference_annual_demand_kwh: 4000 # informational target for the generated fallback demand shape
+
+brokers:
+  - id: regulated_utility
+    type: regulated_utility
+    name: "Regulated Utility"
+    greenness: 0.30 # low-medium: standard grid generation mix, not marketed as green
+    # Anchor: DEI G1 residential tariff / Eurostat nrg_pc_204 (Greece, household band),
+    # order of 0.15-0.25 EUR/kWh in recent years. Representative recent figure, not fitted.
+    base_eur_per_kwh: 0.19
+    seasonal_amplitude_eur_per_kwh: 0.02 # representative winter-heating seasonal swing, not fitted
+    seasonal_peak_day: 15 # mid-January seasonal peak, a representative modelling choice
+
+  - id: volatile_low_cost
+    type: volatile_low_cost
+    name: "Volatile Low-Cost"
+    greenness: 0.10
+    # Cheap baseline below the regulated level; loosely anchored to the order of
+    # magnitude of HEnEx day-ahead average prices. Representative, not fitted.
+    baseline_eur_per_kwh: 0.12
+    mean_reversion_phi: 0.85 # AR(1) persistence of the shock (D5); representative choice
+    shock_scale_eur_per_kwh: 0.03 # innovation scale; representative choice
+    shock_degrees_of_freedom: 3 # low df Student-t for heavy tails (D5); representative choice
+    price_floor_eur_per_kwh: 0.03 # keeps price physically positive under a large negative shock
+    price_cap_multiplier: 4.0 # soft plausibility cap on spike magnitude (x baseline)
+
+  - id: premium_green
+    type: premium_green
+    name: "Premium Green"
+    greenness: 0.95
+    # Modest markup over the regulated broker's base level, representative of
+    # green-tariff premiums seen in EU retail markets. Representative, not fitted.
+    markup_eur_per_kwh: 0.04
