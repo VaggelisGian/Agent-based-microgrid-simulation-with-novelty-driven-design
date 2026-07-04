@@ -133,3 +133,55 @@ def test_load_config_does_not_mutate_input_between_calls():
 def test_load_config_missing_file_raises_config_error():
     with pytest.raises(ConfigError):
         load_config("config/scenarios/does_not_exist.yaml")
+
+
+def test_validate_config_rejects_missing_agent_parameter_key():
+    config = _minimal_valid_config()
+    del config["agent_parameters"]["demand_scale"]
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_validate_config_rejects_inverted_agent_parameter_bounds():
+    config = _minimal_valid_config()
+    config["agent_parameters"]["demand_scale"] = {"min": 1.6, "max": 0.6}
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_validate_config_rejects_missing_prosumer_dispatch_key():
+    config = _minimal_valid_config()
+    del config["prosumer_dispatch"]["evening_reserve_hour"]
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_validate_config_rejects_reserve_fraction_out_of_range():
+    config = _minimal_valid_config()
+    config["prosumer_dispatch"]["reserve_fraction"] = 1.5
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_validate_config_rejects_negative_reserve_fraction():
+    config = _minimal_valid_config()
+    config["prosumer_dispatch"]["reserve_fraction"] = -0.1
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_validate_config_rejects_evening_reserve_hour_out_of_range():
+    config = _minimal_valid_config()
+    config["prosumer_dispatch"]["evening_reserve_hour"] = 24
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_validate_config_accepts_boundary_reserve_values():
+    config = _minimal_valid_config()
+    config["prosumer_dispatch"]["reserve_fraction"] = 0.0
+    config["prosumer_dispatch"]["evening_reserve_hour"] = 0
+    validate_config(config)  # must not raise
+    config["prosumer_dispatch"]["reserve_fraction"] = 1.0
+    config["prosumer_dispatch"]["evening_reserve_hour"] = 23
+    validate_config(config)  # must not raise

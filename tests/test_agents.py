@@ -135,6 +135,7 @@ def test_switching_penalty_blocks_marginal_price_improvement():
 
     assert consumer.broker is current
     assert consumer.switch_count == 0
+    assert consumer.blocked_by_penalty_count == 1
 
 
 def test_stability_oriented_flees_volatile_current_broker_even_if_pricier_alternative():

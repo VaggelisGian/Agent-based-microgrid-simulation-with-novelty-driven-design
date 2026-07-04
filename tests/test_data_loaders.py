@@ -104,7 +104,42 @@ def test_load_profiles_returns_requested_horizon_length(tmp_path):
     assert len(profiles.solar_kw_per_kwp) == 336
     assert len(profiles.demand_kwh_reference) == 336
     assert profiles.demand_source == "generated_sample"
-    assert profiles.solar_source in ("generated_sample", "pvgis_fetch")
+    # allow_network_fetch=False with no cache present guarantees this can only
+    # ever be "generated_sample" (F8: was a loose membership check that would
+    # also have passed if the code path could never actually reach pvgis_fetch).
+    assert profiles.solar_source == "generated_sample"
+
+
+def test_load_profiles_warns_on_synthetic_fallback_cache_build(tmp_path):
+    # F5 fix: building a fresh cache from a synthetic fallback (no existing
+    # cache, no real fetch) must be loud, not silent.
+    config = {
+        "data": {
+            "solar_profile_path": str(tmp_path / "solar.csv"),
+            "demand_profile_path": str(tmp_path / "demand.csv"),
+            "solar_lat": 40.64,
+            "solar_lon": 22.95,
+        }
+    }
+    with pytest.warns(RuntimeWarning, match="synthetic fallback"):
+        load_profiles(config, horizon_hours=48, allow_network_fetch=False)
+
+
+def test_load_profiles_no_warning_when_cache_already_exists(tmp_path):
+    config = {
+        "data": {
+            "solar_profile_path": str(tmp_path / "solar.csv"),
+            "demand_profile_path": str(tmp_path / "demand.csv"),
+            "solar_lat": 40.64,
+            "solar_lon": 22.95,
+        }
+    }
+    load_profiles(config, horizon_hours=48, allow_network_fetch=False)  # builds and caches
+    import warnings as warnings_module
+
+    with warnings_module.catch_warnings():
+        warnings_module.simplefilter("error")
+        load_profiles(config, horizon_hours=48, allow_network_fetch=False)  # loads from cache, no warning
 
 
 def test_load_profiles_caches_to_disk_and_reload_matches(tmp_path):

@@ -31,6 +31,7 @@ def test_broker_record_sale_tracks_served_energy_and_revenue():
     broker.record_sale(price_eur_per_kwh=0.20, energy_kwh=10.0)
     broker.record_sale(price_eur_per_kwh=0.20, energy_kwh=-4.0)  # net export credit
     assert broker.cumulative_energy_served_kwh == pytest.approx(10.0)  # export not counted as load
+    assert broker.cumulative_net_energy_kwh == pytest.approx(6.0)  # signed: 10.0 + -4.0 (F1)
     assert broker.cumulative_revenue_eur == pytest.approx(0.20 * 10.0 + 0.20 * -4.0)
 
 
