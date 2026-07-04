@@ -1,0 +1,12 @@
+# Capacity-mechanism ablation 4 of 4: both feedback channels active. Ledger
+# debit changes broker economics AND the next-step surcharge activates the
+# price-elastic demand-deferral channel (D7), so both effects are present
+# simultaneously (docs/DECISIONS.md's D6/D7 entries).
+extends: ../default.yaml
+
+scenario_name: capacity_both
+
+capacity_mechanism:
+  enabled: true
+  feedback_pnl: true
+  feedback_pricing: true

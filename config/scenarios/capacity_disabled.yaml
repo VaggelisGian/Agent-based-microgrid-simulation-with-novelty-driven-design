@@ -1,0 +1,11 @@
+# Capacity-mechanism ablation 1 of 4: mechanism OFF (the master flag at its
+# documented default). Reuses every default.yaml value and layers only the
+# capacity_mechanism.enabled override (already false in default.yaml; stated
+# explicitly here so the four ablation scenarios form a complete, self-
+# describing set per docs/DECISIONS.md's D6 entry).
+extends: ../default.yaml
+
+scenario_name: capacity_disabled
+
+capacity_mechanism:
+  enabled: false

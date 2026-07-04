@@ -67,6 +67,36 @@ prosumer_dispatch:
   reserve_fraction: 0.2
   evening_reserve_hour: 18
 
+# D6 (Phase 3): shared-feeder scarcity charge, additive and OFF by default.
+# Master flag: enabled. With it false, the model reproduces the plain
+# baseline byte-for-byte (see docs/DECISIONS.md's D6 entry). All coefficients
+# below are representative structural values, fixed across the later Phase 5
+# sweep (only k, broker_count, and the ablation flags vary there); none is
+# tuned to any outcome.
+capacity_mechanism:
+  enabled: false
+  feedback_pnl: false # ledger-debit channel (broker economics only, no price signal)
+  feedback_pricing: false # next-step surcharge channel (the physical channel to metric 3)
+  window: 168 # trailing hours (one week) for the rolling mean/std threshold
+  k: 1.0 # threshold = mean + k * std over the trailing window
+  charge_rate_eur_per_kwh: 0.15 # EUR per kWh of excess above threshold (the CHARGE magnitude)
+  # Signal-strength coefficient that scales a broker's dimensionless
+  # contribution SHARE into a next-step EUR/kWh price adder. This is NOT a
+  # EUR/kWh tariff rate; do not read it as one.
+  capacity_passthrough: 0.10
+  # D7: reference surcharge magnitude (EUR/kWh) against which an agent's own
+  # broker surcharge is compared (clipped to [0, 1]) to size how much of its
+  # deferrable demand actually gets deferred this hour; a representative
+  # structural scale, held fixed across the sweep, not tuned to any outcome.
+  response_reference_eur_per_kwh: 0.05
+  # D7 (Phase 3b): price-elastic intra-day demand-deferral coefficients --
+  # the current physical channel to metric 3 (replaces D6's prosumer storage
+  # response, removed; see docs/DECISIONS.md's D7 entry). Both are
+  # representative structural coefficients, held FIXED across the Phase 5
+  # sweep, never tuned to a metric-3 target.
+  deferrable_fraction: 0.2 # fraction of an agent's hourly base demand eligible to be deferred
+  payback_cap_fraction: 0.5 # bounds the repayment rate: at most this fraction of an hour's base demand can be repaid in one hour
+
 data:
   solar_profile_path: data/samples/solar_thessaloniki_hourly.csv
   demand_profile_path: data/samples/residential_demand_thessaloniki_hourly.csv

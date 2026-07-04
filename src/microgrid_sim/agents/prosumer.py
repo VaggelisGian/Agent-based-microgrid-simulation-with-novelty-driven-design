@@ -48,6 +48,16 @@ class Prosumer(Consumer):
         self.total_grid_import_kwh = 0.0
 
     def _compute_net_import_kwh(self, hour: int, demand_kwh: float) -> float:
+        """Pure D3 reactive dispatch: charge from surplus PV, discharge to
+        cover local demand, holding back a fixed evening reserve until
+        evening_reserve_hour. No price signal, no forecast, no optimization.
+        (Phase 3's D6 scarcity-triggered early reserve-release has been
+        removed per D7: the physical channel to metric 3 is now the
+        price-elastic demand deferral applied to `demand_kwh` upstream, in
+        Consumer._apply_demand_deferral, BEFORE this dispatch runs -- so
+        `demand_kwh` here is already the post-deferral served demand, not raw
+        base demand, but the dispatch logic itself is unmodified D3.)
+        """
         pv_kwh = self.model.solar_profile[hour] * self.pv_capacity_kwp
         hour_of_day = hour % 24
 
@@ -64,6 +74,8 @@ class Prosumer(Consumer):
                 dischargeable_kwh = max(0.0, self.battery_soc_kwh - reserve_kwh)
             else:
                 dischargeable_kwh = self.battery_soc_kwh
+            # Bounded by the prosumer's own deficit: this is self-consumption
+            # toward zero net import, never export-for-credit arbitrage.
             discharge_kwh = min(deficit_kwh, dischargeable_kwh)
             self.battery_soc_kwh -= discharge_kwh
             battery_net_discharge_kwh = discharge_kwh
