@@ -28,9 +28,34 @@ class Broker:
         self._price_history: deque[float] = deque(maxlen=_DEFAULT_PRICE_HISTORY_HOURS)
         self.cumulative_revenue_eur = 0.0
         self.cumulative_energy_served_kwh = 0.0
+        # Signed running total (imports minus exports); used together with
+        # cumulative_revenue_eur (also signed) so the per-kWh price metric's
+        # numerator and denominator share the same energy scope (F1 fix, see
+        # docs/DECISIONS.md observation note).
+        self.cumulative_net_energy_kwh = 0.0
 
     def quote(self, hour: int, context: dict | None = None) -> float:
         raise NotImplementedError
+
+    def reference_price_eur_per_kwh(self) -> float:
+        """Deterministic 'at the start' price used only to rank brokers for
+        initial broker assignment (F3 fix), before quote() has ever been called.
+        Must not depend on stochastic internal state or price history, since at
+        population-construction time neither exists yet. Subclasses override."""
+        raise NotImplementedError
+
+    def reference_volatility_eur_per_kwh(self) -> float:
+        """Deterministic 'typical' price volatility used only to evaluate a
+        stability-oriented profile's categorical filter at initial broker
+        assignment time (F3 fix), before any real price history exists (so the
+        live price_volatility() rolling-window statistic, which needs at least
+        two recorded quotes, cannot yet be used). Default: archetypally stable
+        (0.0), which is exactly correct for brokers with a deterministic or flat
+        price process; the volatile broker overrides this with the analytically
+        derived stationary standard deviation of its shock process. This does
+        not change price_volatility() itself, which is still what agents use for
+        every categorical check after the simulation starts."""
+        return 0.0
 
     def _record_price(self, price: float) -> None:
         self._price_history.append(price)
@@ -48,8 +73,12 @@ class Broker:
     def record_sale(self, price_eur_per_kwh: float, energy_kwh: float) -> None:
         """Record a billing event. energy_kwh may be negative (simple net-metering
         credit for a net-exporting prosumer hour); only the positive part counts
-        as grid load served, but revenue reflects the actual signed cash flow."""
+        as grid load served (cumulative_energy_served_kwh, used for the load-share
+        metric), but revenue and cumulative_net_energy_kwh both reflect the actual
+        signed value (imports minus exports), so a per-kWh price computed from
+        them is scope-consistent (F1 fix)."""
         self.cumulative_energy_served_kwh += max(energy_kwh, 0.0)
+        self.cumulative_net_energy_kwh += energy_kwh
         self.cumulative_revenue_eur += price_eur_per_kwh * energy_kwh
 
 

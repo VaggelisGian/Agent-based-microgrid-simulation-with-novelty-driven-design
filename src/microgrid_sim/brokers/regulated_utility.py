@@ -30,3 +30,9 @@ class RegulatedUtilityBroker(Broker):
         )
         self._record_price(price)
         return price
+
+    def reference_price_eur_per_kwh(self) -> float:
+        """The exact day-0 seasonal price (F3 fix); deterministic, no mutation."""
+        return seasonal_flat_price(
+            self.base_eur_per_kwh, self.seasonal_amplitude_eur_per_kwh, day_of_year=0, peak_day=self.seasonal_peak_day
+        )

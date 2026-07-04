@@ -23,3 +23,7 @@ class PremiumGreenBroker(Broker):
     def quote(self, hour: int, context: dict | None = None) -> float:
         self._record_price(self.price_eur_per_kwh)
         return self.price_eur_per_kwh
+
+    def reference_price_eur_per_kwh(self) -> float:
+        """Exactly the (already fixed, non-stochastic) flat price (F3 fix)."""
+        return self.price_eur_per_kwh

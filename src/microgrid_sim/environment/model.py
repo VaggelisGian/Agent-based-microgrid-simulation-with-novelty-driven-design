@@ -68,6 +68,31 @@ _BROKER_BUILDERS.update(
 )
 
 
+def _initial_acceptable(profile: str, greenness_threshold: float, volatility_tolerance: float, broker) -> bool:
+    """Mirrors Consumer._profile_acceptable's categorical filter (D2), but uses
+    each broker's reference_volatility_eur_per_kwh() instead of the live
+    price_volatility() rolling-window statistic, since no price history exists
+    yet at population-construction time (F3 fix)."""
+    if profile == "stability_oriented":
+        return broker.reference_volatility_eur_per_kwh() <= volatility_tolerance
+    if profile == "green_preferring":
+        return broker.greenness >= greenness_threshold
+    return True  # price_sensitive has no categorical filter (D2)
+
+
+def _select_initial_broker(profile: str, greenness_threshold: float, volatility_tolerance: float, broker_list: list):
+    """Initial broker assignment (F3 fix): pick the cheapest broker (by
+    reference_price_eur_per_kwh()) among those that pass the agent's profile
+    categorical filter, falling back to the overall cheapest if none are
+    acceptable. Replaces the previous uniform-random initial assignment, which
+    caused a one-time "born on the wrong broker, immediately flee" settling
+    transient that dominated measured switching (see docs/DECISIONS.md
+    observation note)."""
+    acceptable = [broker for broker in broker_list if _initial_acceptable(profile, greenness_threshold, volatility_tolerance, broker)]
+    candidates = acceptable if acceptable else broker_list
+    return min(candidates, key=lambda broker: broker.reference_price_eur_per_kwh())
+
+
 class MicrogridModel(mesa.Model):
     def __init__(self, config: dict, seed=None):
         resolved_seed = seed if seed is not None else config.get("simulation", {}).get("seed")
@@ -136,7 +161,9 @@ class MicrogridModel(mesa.Model):
             greenness_threshold = self._sample_uniform(params_cfg["greenness_threshold"])
             switching_penalty = self._sample_uniform(params_cfg["switching_penalty_eur_per_kwh"])
             sustained_breach_hours = self._sample_int(params_cfg["sustained_breach_hours"])
-            initial_broker = self.random.choice(broker_list)
+            # F3 fix: deterministic, profile-compatible initial assignment
+            # instead of uniform-random (see _select_initial_broker docstring).
+            initial_broker = _select_initial_broker(profile, greenness_threshold, volatility_tolerance, broker_list)
 
             if index in prosumer_indices:
                 Prosumer(

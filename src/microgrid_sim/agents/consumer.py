@@ -35,6 +35,10 @@ class Consumer(mesa.Agent):
 
         self._breach_streak = 0
         self.switch_count = 0
+        # Counts reconsiderations where a cheaper acceptable broker existed but
+        # the price gap did not clear switching_penalty_eur_per_kwh (F3
+        # observability; see docs/DECISIONS.md observation note).
+        self.blocked_by_penalty_count = 0
         self.last_demand_kwh = 0.0
         self.last_net_import_kwh = 0.0
         self.last_billed_eur = 0.0
@@ -116,3 +120,5 @@ class Consumer(mesa.Agent):
         if (current_price - best_price) > self.switching_penalty_eur_per_kwh:
             self.broker = best
             self.switch_count += 1
+        else:
+            self.blocked_by_penalty_count += 1

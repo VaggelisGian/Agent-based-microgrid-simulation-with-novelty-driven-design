@@ -27,10 +27,25 @@ class MetricsResult:
 
 
 def compute_average_cost(brokers: dict, num_agents: int) -> tuple[float, float]:
+    """avg_cost_per_agent_eur: total net revenue (import charges minus export
+    credits) divided by the number of agents; netting is correct here since this
+    is a per-agent net-bill figure.
+
+    avg_cost_per_kwh_eur (F1 fix): effective net price = the SAME total net
+    revenue divided by total NET energy (imports minus exports), i.e. numerator
+    and denominator share one signed energy scope. Previously the denominator
+    counted only positive (import) energy while the numerator already netted out
+    export credits, which understated this metric by about 8.5% on the default
+    config (see docs/DECISIONS.md observation note for the measured before/after
+    values). Broker.cumulative_energy_served_kwh (import-only, unsigned) is
+    intentionally left out of this computation and is used only for the load
+    distribution metric (compute_load_distribution), where "load served" is the
+    correct, unsigned notion.
+    """
     total_revenue_eur = sum(broker.cumulative_revenue_eur for broker in brokers.values())
-    total_energy_kwh = sum(broker.cumulative_energy_served_kwh for broker in brokers.values())
+    total_net_energy_kwh = sum(broker.cumulative_net_energy_kwh for broker in brokers.values())
     avg_cost_per_agent = total_revenue_eur / num_agents if num_agents > 0 else 0.0
-    avg_cost_per_kwh = total_revenue_eur / total_energy_kwh if total_energy_kwh > 0 else 0.0
+    avg_cost_per_kwh = total_revenue_eur / total_net_energy_kwh if total_net_energy_kwh > 0 else 0.0
     return avg_cost_per_agent, avg_cost_per_kwh
 
 

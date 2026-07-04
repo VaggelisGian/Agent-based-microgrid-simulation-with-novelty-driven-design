@@ -31,6 +31,15 @@ def main() -> None:
     print(f"num_agents: {model.num_agents}")
     print(f"solar_source: {model.solar_source}")
     print(f"demand_source: {model.demand_source}")
+    if model.solar_source != "pvgis_fetch":
+        # F5 fix: make a silent fallback visible at the point results are
+        # produced, not just discoverable by manually inspecting the cache CSV.
+        print(
+            "WARNING: solar_source is not 'pvgis_fetch' "
+            f"(got {model.solar_source!r}); this run used a synthetic solar "
+            "profile, not real Thessaloniki PVGIS data.",
+            file=sys.stderr,
+        )
     print()
     print("Metric 1 - average cost per agent:")
     print(f"  avg_cost_per_agent_eur = {result.avg_cost_per_agent_eur:.4f}")

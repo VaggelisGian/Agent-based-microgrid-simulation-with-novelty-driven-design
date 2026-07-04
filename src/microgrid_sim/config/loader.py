@@ -49,6 +49,21 @@ _REQUIRED_TOP_LEVEL_KEYS = (
     "brokers",
 )
 
+# F6 fix: the known agent_parameters sub-keys (each a {min, max} sampled range),
+# matching what MicrogridModel._build_population expects (environment/model.py).
+_AGENT_PARAMETER_KEYS = (
+    "demand_scale",
+    "price_tolerance_eur_per_kwh",
+    "volatility_tolerance_eur_per_kwh",
+    "greenness_threshold",
+    "switching_penalty_eur_per_kwh",
+    "sustained_breach_hours",
+    "prosumer_pv_capacity_kwp",
+    "prosumer_battery_capacity_kwh",
+)
+
+_PROSUMER_DISPATCH_KEYS = ("reserve_fraction", "evening_reserve_hour")
+
 
 class ConfigError(ValueError):
     """Raised when a scenario configuration file is missing or invalid."""
@@ -152,3 +167,30 @@ def validate_config(config: dict) -> None:
         greenness = broker["greenness"]
         if not (0.0 <= greenness <= 1.0):
             raise ConfigError(f"broker '{broker['id']}' greenness must be within [0, 1]")
+
+    # F6 fix: agent_parameters structure and min <= max for every sampled range.
+    # A missing key previously surfaced as a raw KeyError deep inside
+    # MicrogridModel._build_population, well after config loading appeared to
+    # succeed; an inverted bound previously silently reversed the sampled
+    # distribution (random.uniform/randint do not validate min <= max).
+    agent_parameters = config["agent_parameters"]
+    _require_keys(agent_parameters, _AGENT_PARAMETER_KEYS, "agent_parameters")
+    for key in _AGENT_PARAMETER_KEYS:
+        bounds = agent_parameters[key]
+        if not isinstance(bounds, dict):
+            raise ConfigError(f"agent_parameters.{key} must be a mapping with 'min' and 'max' keys")
+        _require_keys(bounds, ("min", "max"), f"agent_parameters.{key}")
+        if bounds["min"] > bounds["max"]:
+            raise ConfigError(
+                f"agent_parameters.{key}: min ({bounds['min']}) must be <= max ({bounds['max']})"
+            )
+
+    # F6 fix: prosumer_dispatch structure and value ranges.
+    prosumer_dispatch = config["prosumer_dispatch"]
+    _require_keys(prosumer_dispatch, _PROSUMER_DISPATCH_KEYS, "prosumer_dispatch")
+    reserve_fraction = prosumer_dispatch["reserve_fraction"]
+    if not (0.0 <= reserve_fraction <= 1.0):
+        raise ConfigError("prosumer_dispatch.reserve_fraction must be within [0, 1]")
+    evening_reserve_hour = prosumer_dispatch["evening_reserve_hour"]
+    if not isinstance(evening_reserve_hour, int) or not (0 <= evening_reserve_hour <= 23):
+        raise ConfigError("prosumer_dispatch.evening_reserve_hour must be an integer within [0, 23]")

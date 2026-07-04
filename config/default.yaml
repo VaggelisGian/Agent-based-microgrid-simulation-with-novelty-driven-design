@@ -34,12 +34,24 @@ agent_parameters:
   volatility_tolerance_eur_per_kwh:
     min: 0.01
     max: 0.05
+  # F2 fix: widened to straddle the regulated broker's greenness (0.30) so
+  # green-preferring agents split into two behavioural groups instead of all
+  # landing in {premium_green only} regardless of their sampled threshold
+  # (previous [0.35, 0.75] never overlapped any broker's actual greenness value).
+  # The volatile broker (0.10) stays rejected by all green-preferring agents
+  # since 0.20 (the new minimum) is still above it.
   greenness_threshold:
-    min: 0.35
-    max: 0.75
+    min: 0.20
+    max: 0.55
+  # F3 fix: recalibrated to the order of magnitude of observed inter-broker
+  # price gaps (regulated approx 0.17-0.21, volatile baseline 0.12 with realized
+  # stdev approx 0.06-0.08, green flat 0.23; gaps of roughly 0.04-0.11), so this
+  # status-quo-bias magnitude can actually block a marginal reconsideration
+  # instead of being an order of magnitude too small to ever bind (previous
+  # [0.003, 0.02] blocked 0 of 78 reconsiderations over a full year).
   switching_penalty_eur_per_kwh:
-    min: 0.003
-    max: 0.02
+    min: 0.02
+    max: 0.06
   sustained_breach_hours:
     min: 12
     max: 96
@@ -81,7 +93,11 @@ brokers:
     # magnitude of HEnEx day-ahead average prices. Representative, not fitted.
     baseline_eur_per_kwh: 0.12
     mean_reversion_phi: 0.85 # AR(1) persistence of the shock (D5); representative choice
-    shock_scale_eur_per_kwh: 0.03 # innovation scale; representative choice
+    # F4 fix: reduced from 0.03 so the price floor (below) binds as a rare tail
+    # guard rather than routinely (measured well under 2% of hours at 0.015,
+    # combined with the anti-windup state-reset fix in volatile_low_cost.py;
+    # see docs/DECISIONS.md observation note for exact measured hit rates).
+    shock_scale_eur_per_kwh: 0.015 # innovation scale; recalibrated for floor rarity (F4)
     shock_degrees_of_freedom: 3 # low df Student-t for heavy tails (D5); representative choice
     price_floor_eur_per_kwh: 0.03 # keeps price physically positive under a large negative shock
     price_cap_multiplier: 4.0 # soft plausibility cap on spike magnitude (x baseline)

@@ -22,6 +22,7 @@ a future hour, so there is no look-ahead leakage.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -194,6 +195,21 @@ def _load_or_build(path: Path, column: str, build_fn, allow_negative: bool) -> t
 
     series, source = build_fn()
     validate_series(series, name=column, allow_negative=allow_negative)
+    if source != "pvgis_fetch":
+        # F5 fix: a cache file rebuilt from a synthetic fallback (rather than
+        # loaded from an existing cache or fetched from a live source) silently
+        # changes the numerical character of the series (e.g. real Thessaloniki
+        # irradiance vs. a smooth synthetic sinusoid) for every subsequent run
+        # unless flagged loudly at the point it happens.
+        warnings.warn(
+            f"{path}: no cached file found; writing a new cache built from a "
+            f"synthetic fallback (source={source!r}), not a real fetch. If this "
+            f"is unexpected (e.g. the shipped data/samples/ cache was deleted), "
+            f"results from this point on use a different '{column}' series than "
+            f"prior runs.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
     _write_cached_csv(path, series, column, source)
     return series, source
 
