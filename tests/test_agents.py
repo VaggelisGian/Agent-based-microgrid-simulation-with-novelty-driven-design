@@ -277,6 +277,130 @@ def test_prosumer_releases_reserve_after_evening_hour():
     assert prosumer.last_net_import_kwh == pytest.approx(0.0)
 
 
+def test_demand_deferral_shifts_load_from_peak_to_later_hour():
+    """Phase 3b (D7): a positive surcharge at a peak hour defers a fraction of
+    that hour's base demand; once the surcharge drops back to zero, the
+    deferred bucket pays itself back, raising a later hour's served demand
+    above its own base -- the physical channel that can shave a feeder peak."""
+    model = HarnessModel(horizon=5)
+    model.demand_profile[:] = 4.0
+    model.capacity_response_reference_eur_per_kwh = 0.05
+    model.capacity_deferrable_fraction = 0.5
+    model.capacity_payback_cap_fraction = 1.0
+    broker = StubBroker("b1", price=0.20)
+    model.brokers = {"b1": broker}
+    model.current_prices = {"b1": 0.20}
+    consumer = Consumer(model, **_consumer_kwargs(demand_scale=1.0, initial_broker=broker))
+
+    model.current_hour = 0
+    model.broker_surcharges = {"b1": 0.05}  # at response_reference: full clip factor
+    consumer.step()
+    assert consumer.last_demand_kwh < 4.0
+    assert consumer.deferred_kwh > 0.0
+
+    model.current_hour = 1
+    model.broker_surcharges = {"b1": 0.0}
+    consumer.step()
+    assert consumer.last_demand_kwh > 4.0
+
+
+def test_demand_deferral_conserves_daily_energy_total():
+    """Daily energy conservation: over a full 24h day with a mix of scarcity
+    and non-scarcity hours, total served demand equals total base demand
+    (deferral SHIFTS load, it never deletes it), and the bucket is fully
+    repaid by hour_of_day == 23."""
+    model = HarnessModel(horizon=24)
+    model.demand_profile[:] = [3.0 + (hour % 5) * 0.3 for hour in range(24)]
+    model.capacity_response_reference_eur_per_kwh = 0.05
+    model.capacity_deferrable_fraction = 0.3
+    model.capacity_payback_cap_fraction = 0.4
+    broker = StubBroker("b1", price=0.20)
+    model.brokers = {"b1": broker}
+    model.current_prices = {"b1": 0.20}
+    consumer = Consumer(model, **_consumer_kwargs(demand_scale=1.0, initial_broker=broker))
+
+    total_base = 0.0
+    total_served = 0.0
+    for hour in range(24):
+        model.current_hour = hour
+        model.broker_surcharges = {"b1": 0.06 if 17 <= hour <= 20 else 0.0}
+        total_base += model.demand_profile[hour]
+        consumer.step()
+        total_served += consumer.last_demand_kwh
+
+    assert total_served == pytest.approx(total_base, abs=1e-9)
+    assert consumer.deferred_kwh == pytest.approx(0.0, abs=1e-9)
+
+
+def test_demand_deferral_defer_amount_matches_formula_exactly():
+    """Exact-value pin of the D7 defer formula: defer = deferrable_fraction *
+    base * clip(surcharge / response_reference, 0, 1)."""
+    model = HarnessModel(horizon=2)
+    model.demand_profile[0] = 5.0
+    model.capacity_response_reference_eur_per_kwh = 0.05
+    model.capacity_deferrable_fraction = 0.2
+    model.capacity_payback_cap_fraction = 0.5
+    broker = StubBroker("b1", price=0.20)
+    model.brokers = {"b1": broker}
+    model.current_prices = {"b1": 0.20}
+    model.broker_surcharges = {"b1": 0.025}  # half of response_reference
+    consumer = Consumer(model, **_consumer_kwargs(demand_scale=1.0, initial_broker=broker))
+
+    consumer.step()
+
+    expected_defer = 0.2 * 5.0 * (0.025 / 0.05)
+    assert consumer.last_demand_kwh == pytest.approx(5.0 - expected_defer)
+    assert consumer.deferred_kwh == pytest.approx(expected_defer)
+    assert consumer.total_deferred_kwh == pytest.approx(expected_defer)
+
+
+def test_demand_deferral_clips_factor_at_one_when_surcharge_exceeds_reference():
+    model = HarnessModel(horizon=2)
+    model.demand_profile[0] = 5.0
+    model.capacity_response_reference_eur_per_kwh = 0.05
+    model.capacity_deferrable_fraction = 0.2
+    model.capacity_payback_cap_fraction = 0.5
+    broker = StubBroker("b1", price=0.20)
+    model.brokers = {"b1": broker}
+    model.current_prices = {"b1": 0.20}
+    model.broker_surcharges = {"b1": 0.5}  # 10x response_reference: factor must clip at 1.0
+    consumer = Consumer(model, **_consumer_kwargs(demand_scale=1.0, initial_broker=broker))
+
+    consumer.step()
+
+    max_defer = 0.2 * 5.0
+    assert consumer.deferred_kwh == pytest.approx(max_defer)
+
+
+def test_prosumer_dispatch_operates_on_post_deferral_served_demand():
+    """D7: deferral is applied to the agent's base demand BEFORE the
+    prosumer's PV/battery dispatch, so the battery/PV logic (and the
+    self-sufficiency accumulators) see the served (post-deferral) demand, not
+    raw base demand."""
+    model = HarnessModel()
+    model.demand_profile[0] = 4.0
+    model.solar_profile[0] = 0.0
+    model.capacity_response_reference_eur_per_kwh = 0.05
+    model.capacity_deferrable_fraction = 0.5
+    model.capacity_payback_cap_fraction = 0.5
+    model.broker_surcharges = {"b1": 0.05}  # full clip factor
+    broker = StubBroker("b1", price=0.20)
+    model.brokers = {"b1": broker}
+    model.current_prices = {"b1": 0.20}
+    prosumer = Prosumer(
+        model,
+        **_prosumer_kwargs(battery_capacity_kwh=10.0, reserve_fraction=0.0, evening_reserve_hour=0, initial_broker=broker),
+    )
+    prosumer.battery_soc_kwh = 10.0
+
+    prosumer.step()
+
+    served_demand = 4.0 - (0.5 * 4.0 * 1.0)  # base 4.0 minus full deferral of half of it
+    assert prosumer.last_net_import_kwh == pytest.approx(0.0)  # battery covers served demand fully
+    assert prosumer.battery_soc_kwh == pytest.approx(10.0 - served_demand)
+    assert prosumer.total_demand_kwh == pytest.approx(served_demand)
+
+
 def test_prosumer_self_sufficiency_accumulators_track_demand_and_grid_import():
     model = HarnessModel(horizon=3)
     model.demand_profile[:] = [2.0, 2.0, 2.0]

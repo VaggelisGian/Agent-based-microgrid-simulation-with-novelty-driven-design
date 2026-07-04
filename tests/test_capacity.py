@@ -29,6 +29,8 @@ def _valid_capacity_block():
         "charge_rate_eur_per_kwh": 0.15,
         "capacity_passthrough": 0.10,
         "response_reference_eur_per_kwh": 0.05,
+        "deferrable_fraction": 0.2,
+        "payback_cap_fraction": 0.5,
     }
 
 
@@ -82,6 +84,46 @@ def test_capacity_mechanism_rejects_non_boolean_enabled():
         validate_config(config)
 
 
+def test_capacity_mechanism_rejects_deferrable_fraction_out_of_range():
+    """D7: deferrable_fraction is a fraction of base demand, must be in [0, 1]."""
+    config = load_config("config/default.yaml")
+    config = copy.deepcopy(config)
+    config["capacity_mechanism"] = _valid_capacity_block()
+    config["capacity_mechanism"]["deferrable_fraction"] = 1.5
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_capacity_mechanism_rejects_negative_deferrable_fraction():
+    config = load_config("config/default.yaml")
+    config = copy.deepcopy(config)
+    config["capacity_mechanism"] = _valid_capacity_block()
+    config["capacity_mechanism"]["deferrable_fraction"] = -0.1
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_capacity_mechanism_rejects_payback_cap_fraction_out_of_range():
+    config = load_config("config/default.yaml")
+    config = copy.deepcopy(config)
+    config["capacity_mechanism"] = _valid_capacity_block()
+    config["capacity_mechanism"]["payback_cap_fraction"] = 1.1
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
+def test_capacity_mechanism_rejects_non_positive_response_reference():
+    """D7: response_reference_eur_per_kwh is a divisor in the deferral clip
+    formula, so it must be strictly positive (tightened from the previous
+    'non-negative' bound now that Consumer/Prosumer both divide by it)."""
+    config = load_config("config/default.yaml")
+    config = copy.deepcopy(config)
+    config["capacity_mechanism"] = _valid_capacity_block()
+    config["capacity_mechanism"]["response_reference_eur_per_kwh"] = 0.0
+    with pytest.raises(ConfigError):
+        validate_config(config)
+
+
 def test_all_four_ablation_scenario_files_load_and_validate():
     expected_flags = {
         "capacity_disabled": (False, False, False),
@@ -98,6 +140,11 @@ def test_all_four_ablation_scenario_files_load_and_validate():
         # Structural coefficients stay fixed across ablations (only the flags vary).
         assert capacity["window"] == 168
         assert capacity["k"] == 1.0
+        # D7 guardrail: the deferral coefficients are representative structural
+        # values too, held fixed across the ablation/k sweep.
+        assert capacity["deferrable_fraction"] == pytest.approx(0.2)
+        assert capacity["payback_cap_fraction"] == pytest.approx(0.5)
+        assert capacity["response_reference_eur_per_kwh"] == pytest.approx(0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +372,75 @@ def test_capacity_both_allocates_charge_unevenly_across_brokers_by_contribution(
     assert len(set(charges)) > 1, "capacity charge was spread identically across brokers"
 
 
-def test_master_flag_off_means_prosumer_storage_response_is_inert():
-    """With the mechanism disabled, broker_surcharges must stay all-zero for
-    the whole run, so the prosumer storage response never activates and the
-    unmodified D3 static-reserve dispatch is used throughout."""
+def test_master_flag_off_means_demand_deferral_is_inert():
+    """Phase 3b (D7): with the mechanism disabled, broker_surcharges must stay
+    all-zero for the whole run, so the price-elastic demand-deferral channel
+    (the current physical channel to metric 3, replacing D6's prosumer
+    storage response) never activates for ANY agent, consumer or prosumer,
+    and every agent's deferred_kwh bucket and total_deferred_kwh audit
+    accumulator stay at zero throughout."""
     config = _competitive_config(horizon=48)
     model = MicrogridModel(config)
     for _ in range(48):
         model.step()
         assert all(value == 0.0 for value in model.broker_surcharges.values())
+    for agent in model.agents:
+        assert agent.deferred_kwh == 0.0
+        assert agent.total_deferred_kwh == 0.0
+
+
+def test_capacity_pnl_only_reproduces_plain_baseline_byte_for_byte():
+    """D7 guardrail: capacity_pnl_only debits cumulative_capacity_charge_eur,
+    an accumulator that is not part of any of the four MetricsResult metrics,
+    and writes no surcharge into any quote (broker_surcharges stays all-zero),
+    so it must reproduce the plain baseline's feeder_net_import_history and
+    compute_metrics() output byte-for-byte, exactly like capacity_disabled."""
+    config_no_block = _competitive_config()
+    del config_no_block["capacity_mechanism"]
+    model_no_block = _run(config_no_block, SHORT_HORIZON)
+
+    pnl_only_config = _load_ablation("capacity_pnl_only", horizon=SHORT_HORIZON, num_agents=60, seed=3)
+    model_pnl_only = _run(pnl_only_config, SHORT_HORIZON)
+
+    assert model_pnl_only.feeder_net_import_history == model_no_block.feeder_net_import_history
+    assert model_pnl_only.compute_metrics() == model_no_block.compute_metrics()
+    for agent in model_pnl_only.agents:
+        assert agent.deferred_kwh == 0.0
+        assert agent.total_deferred_kwh == 0.0
+
+
+def test_ablation_isolation_pnl_only_matches_disabled_pricing_diverges():
+    """D7 ablation isolation: capacity_pnl_only's physical feeder series must
+    be identical to capacity_disabled's (no surcharge => no deferral => same
+    physical dispatch), while capacity_pricing_only (which DOES write a
+    surcharge) is free to diverge."""
+    horizon = 500
+    disabled = _run(_load_ablation("capacity_disabled", horizon=horizon), horizon)
+    pnl_only = _run(_load_ablation("capacity_pnl_only", horizon=horizon), horizon)
+    pricing_only = _run(_load_ablation("capacity_pricing_only", horizon=horizon), horizon)
+
+    assert pnl_only.feeder_net_import_history == disabled.feeder_net_import_history
+    assert pricing_only.feeder_net_import_history != disabled.feeder_net_import_history
+
+
+def test_total_deferred_kwh_audit_is_positive_under_pricing_and_zero_otherwise():
+    """D7: the total_deferred_kwh audit quantity (sum of deferred energy over
+    the run, across all agents) must be exactly 0.0 whenever the pricing
+    channel never writes a positive surcharge (capacity_disabled,
+    capacity_pnl_only), and strictly positive once it does and the deferral
+    formula actually fires (capacity_pricing_only, capacity_both)."""
+    horizon = 500
+
+    def _metrics(name):
+        return _run(_load_ablation(name, horizon=horizon, num_agents=90, seed=5), horizon).compute_metrics()
+
+    disabled = _metrics("capacity_disabled")
+    pnl_only = _metrics("capacity_pnl_only")
+    pricing_only = _metrics("capacity_pricing_only")
+    both = _metrics("capacity_both")
+
+    assert pricing_only.capacity_fire_rate > 0.0  # sanity: construction actually fires
+    assert disabled.total_deferred_kwh == 0.0
+    assert pnl_only.total_deferred_kwh == 0.0
+    assert pricing_only.total_deferred_kwh > 0.0
+    assert both.total_deferred_kwh > 0.0
