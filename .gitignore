@@ -1,4 +1,5 @@
 /docs
+/scratchpad
 
 __pycache__/
 *.py[cod]
