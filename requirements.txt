@@ -1,0 +1,15 @@
+# Pinned to the versions installed and verified on the development machine
+# (see docs/HARDWARE.md and docs/PROGRESS.md). Mesa 3.5.1 is the API target;
+# do not upgrade to a 2.x line (different scheduler API) or a much newer 3.x
+# without re-checking the Mesa 3.x API notes in docs/PROJECT_CONTEXT.md.
+mesa==3.5.1
+numpy==2.4.3
+pandas==2.3.3
+scipy==1.16.2
+PyYAML==6.0.3
+requests==2.32.5
+psutil==7.2.2
+pyarrow==20.0.0
+matplotlib==3.10.7
+pytest==8.4.2
+pytest-xdist==3.8.0

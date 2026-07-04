@@ -1,0 +1,19 @@
+[project]
+name = "microgrid-sim"
+version = "0.1.0"
+description = "Agent-based microgrid simulation with novelty-driven design (diploma thesis 26170)"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+# Mesa 3.5.1 still supports seed= (the brief's mandated, well-documented API) but
+# emits a FutureWarning nudging toward rng=; functionally identical per Mesa's own
+# message, so it is silenced here rather than worked around.
+filterwarnings = [
+    "ignore:The use of the `seed` keyword argument is deprecated:FutureWarning",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

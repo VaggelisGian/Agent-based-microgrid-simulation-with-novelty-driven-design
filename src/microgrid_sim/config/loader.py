@@ -1,0 +1,154 @@
+"""YAML scenario configuration loading and validation.
+
+Scenario files may set an ``extends: <relative-path>`` key to reuse another
+file's values and override only a subset (see config/scenarios/monopoly_baseline.yaml).
+The override rule is: dicts merge recursively key by key; any other value
+(including lists, such as the broker set) fully replaces the base value.
+"""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+_KNOWN_BROKER_TYPES = {"regulated_utility", "volatile_low_cost", "premium_green"}
+
+_REQUIRED_BROKER_FIELDS = {
+    "regulated_utility": {
+        "id",
+        "name",
+        "greenness",
+        "base_eur_per_kwh",
+        "seasonal_amplitude_eur_per_kwh",
+        "seasonal_peak_day",
+    },
+    "volatile_low_cost": {
+        "id",
+        "name",
+        "greenness",
+        "baseline_eur_per_kwh",
+        "mean_reversion_phi",
+        "shock_scale_eur_per_kwh",
+        "shock_degrees_of_freedom",
+        "price_floor_eur_per_kwh",
+        "price_cap_multiplier",
+    },
+    "premium_green": {"id", "name", "greenness", "markup_eur_per_kwh"},
+}
+
+_REQUIRED_TOP_LEVEL_KEYS = (
+    "simulation",
+    "population",
+    "switching",
+    "agent_parameters",
+    "prosumer_dispatch",
+    "data",
+    "brokers",
+)
+
+
+class ConfigError(ValueError):
+    """Raised when a scenario configuration file is missing or invalid."""
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, override_value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(override_value, dict):
+            merged[key] = _deep_merge(base_value, override_value)
+        else:
+            merged[key] = copy.deepcopy(override_value)
+    return merged
+
+
+def _read_yaml_file(path: Path) -> dict:
+    if not path.is_file():
+        raise ConfigError(f"config file not found: {path}")
+    with open(path, "r", encoding="ascii") as handle:
+        content = yaml.safe_load(handle)
+    if not isinstance(content, dict):
+        raise ConfigError(f"config file did not parse to a mapping: {path}")
+    return content
+
+
+def _load_raw(path: Path) -> dict:
+    content = _read_yaml_file(path)
+    extends = content.pop("extends", None)
+    if extends is None:
+        return content
+    base_path = (path.parent / extends).resolve()
+    base_content = _load_raw(base_path)
+    return _deep_merge(base_content, content)
+
+
+def load_config(path: str | Path) -> dict:
+    """Load a scenario YAML file, resolving any ``extends`` chain, and validate it."""
+    resolved_path = Path(path)
+    try:
+        config = _load_raw(resolved_path)
+    except ConfigError:
+        raise
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ConfigError(f"could not read config file {resolved_path}: {exc}") from exc
+    validate_config(config)
+    return config
+
+
+def _require_keys(mapping: dict, keys, context: str) -> None:
+    missing = [key for key in keys if key not in mapping]
+    if missing:
+        raise ConfigError(f"{context} missing required key(s): {sorted(missing)}")
+
+
+def validate_config(config: dict) -> None:
+    """Raise ConfigError if the config dict is structurally or semantically invalid."""
+    _require_keys(config, _REQUIRED_TOP_LEVEL_KEYS, "config")
+
+    horizon_hours = config["simulation"].get("horizon_hours")
+    if not isinstance(horizon_hours, int) or horizon_hours <= 0:
+        raise ConfigError("simulation.horizon_hours must be a positive integer")
+
+    _require_keys(config["switching"], ("enabled",), "switching")
+    if not isinstance(config["switching"]["enabled"], bool):
+        raise ConfigError("switching.enabled must be a boolean")
+
+    population = config["population"]
+    _require_keys(population, ("num_agents", "prosumer_fraction", "profile_mix"), "population")
+
+    if not isinstance(population["num_agents"], int) or population["num_agents"] <= 0:
+        raise ConfigError("population.num_agents must be a positive integer")
+
+    prosumer_fraction = population["prosumer_fraction"]
+    if not (0.0 <= prosumer_fraction <= 1.0):
+        raise ConfigError("population.prosumer_fraction must be within [0, 1]")
+
+    profile_mix = population["profile_mix"]
+    if not profile_mix:
+        raise ConfigError("population.profile_mix must not be empty")
+    mix_total = sum(profile_mix.values())
+    if abs(mix_total - 1.0) > 1e-6:
+        raise ConfigError(f"population.profile_mix must sum to 1.0, got {mix_total}")
+
+    brokers = config["brokers"]
+    if not brokers:
+        raise ConfigError("brokers list must not be empty")
+
+    seen_ids = set()
+    for broker in brokers:
+        _require_keys(broker, ("id", "type"), "broker entry")
+        broker_type = broker["type"]
+        if broker_type not in _KNOWN_BROKER_TYPES:
+            raise ConfigError(f"unknown broker type: {broker_type}")
+        _require_keys(
+            broker, _REQUIRED_BROKER_FIELDS[broker_type], f"broker '{broker['id']}' ({broker_type})"
+        )
+        if broker["id"] in seen_ids:
+            raise ConfigError(f"duplicate broker id: {broker['id']}")
+        seen_ids.add(broker["id"])
+        greenness = broker["greenness"]
+        if not (0.0 <= greenness <= 1.0):
+            raise ConfigError(f"broker '{broker['id']}' greenness must be within [0, 1]")
