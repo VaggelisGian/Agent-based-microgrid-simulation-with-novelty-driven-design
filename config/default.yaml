@@ -67,6 +67,28 @@ prosumer_dispatch:
   reserve_fraction: 0.2
   evening_reserve_hour: 18
 
+# D6 (Phase 3): shared-feeder scarcity charge, additive and OFF by default.
+# Master flag: enabled. With it false, the model reproduces the plain
+# baseline byte-for-byte (see docs/DECISIONS.md's D6 entry). All coefficients
+# below are representative structural values, fixed across the later Phase 5
+# sweep (only k, broker_count, and the ablation flags vary there); none is
+# tuned to any outcome.
+capacity_mechanism:
+  enabled: false
+  feedback_pnl: false # ledger-debit channel (broker economics only, no price signal)
+  feedback_pricing: false # next-step surcharge channel (the physical channel to metric 3)
+  window: 168 # trailing hours (one week) for the rolling mean/std threshold
+  k: 1.0 # threshold = mean + k * std over the trailing window
+  charge_rate_eur_per_kwh: 0.15 # EUR per kWh of excess above threshold (the CHARGE magnitude)
+  # Signal-strength coefficient that scales a broker's dimensionless
+  # contribution SHARE into a next-step EUR/kWh price adder. This is NOT a
+  # EUR/kWh tariff rate; do not read it as one.
+  capacity_passthrough: 0.10
+  # Reference surcharge magnitude (EUR/kWh) against which a prosumer's own
+  # broker surcharge is compared to size its early reserve release (D3
+  # coupling); a representative structural scale, not tuned.
+  response_reference_eur_per_kwh: 0.05
+
 data:
   solar_profile_path: data/samples/solar_thessaloniki_hourly.csv
   demand_profile_path: data/samples/residential_demand_thessaloniki_hourly.csv

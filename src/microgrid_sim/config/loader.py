@@ -64,6 +64,30 @@ _AGENT_PARAMETER_KEYS = (
 
 _PROSUMER_DISPATCH_KEYS = ("reserve_fraction", "evening_reserve_hour")
 
+# Phase 3 (D6): the capacity_mechanism block is OPTIONAL at the top level (its
+# absence means the mechanism is disabled, matching the master flag's own
+# documented default), so it is deliberately NOT in _REQUIRED_TOP_LEVEL_KEYS;
+# this keeps every pre-Phase-3 config (including the minimal test fixture in
+# tests/test_config_loader.py) valid without edits. When the block IS present,
+# every key below is required and validated.
+_CAPACITY_MECHANISM_KEYS = (
+    "enabled",
+    "feedback_pnl",
+    "feedback_pricing",
+    "window",
+    "k",
+    "charge_rate_eur_per_kwh",
+    "capacity_passthrough",
+    "response_reference_eur_per_kwh",
+)
+_CAPACITY_MECHANISM_BOOL_KEYS = ("enabled", "feedback_pnl", "feedback_pricing")
+_CAPACITY_MECHANISM_NONNEGATIVE_NUMERIC_KEYS = (
+    "k",
+    "charge_rate_eur_per_kwh",
+    "capacity_passthrough",
+    "response_reference_eur_per_kwh",
+)
+
 
 class ConfigError(ValueError):
     """Raised when a scenario configuration file is missing or invalid."""
@@ -194,3 +218,35 @@ def validate_config(config: dict) -> None:
     evening_reserve_hour = prosumer_dispatch["evening_reserve_hour"]
     if not isinstance(evening_reserve_hour, int) or not (0 <= evening_reserve_hour <= 23):
         raise ConfigError("prosumer_dispatch.evening_reserve_hour must be an integer within [0, 23]")
+
+    _validate_capacity_mechanism(config)
+
+
+def _validate_capacity_mechanism(config: dict) -> None:
+    """Phase 3 (D6): validate the optional capacity_mechanism block, if present.
+
+    capacity_passthrough is a signal-strength coefficient (a dimensionless-to-
+    EUR/kWh scaling factor for a contribution SHARE), not a EUR/kWh tariff
+    rate; charge_rate_eur_per_kwh is the separate CHARGE-magnitude coefficient.
+    Both are validated only for basic type/sign sanity here, not against any
+    tuned outcome.
+    """
+    if "capacity_mechanism" not in config:
+        return
+    capacity = config["capacity_mechanism"]
+    if not isinstance(capacity, dict):
+        raise ConfigError("capacity_mechanism must be a mapping")
+    _require_keys(capacity, _CAPACITY_MECHANISM_KEYS, "capacity_mechanism")
+
+    for key in _CAPACITY_MECHANISM_BOOL_KEYS:
+        if not isinstance(capacity[key], bool):
+            raise ConfigError(f"capacity_mechanism.{key} must be a boolean")
+
+    window = capacity["window"]
+    if not isinstance(window, int) or isinstance(window, bool) or window < 1:
+        raise ConfigError("capacity_mechanism.window must be an integer >= 1")
+
+    for key in _CAPACITY_MECHANISM_NONNEGATIVE_NUMERIC_KEYS:
+        value = capacity[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(f"capacity_mechanism.{key} must be a non-negative number")

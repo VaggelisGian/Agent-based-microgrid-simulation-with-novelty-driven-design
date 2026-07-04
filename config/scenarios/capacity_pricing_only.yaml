@@ -1,0 +1,13 @@
+# Capacity-mechanism ablation 3 of 4: pricing (surcharge) channel only. No
+# ledger debit, so broker economics are unaffected by the charge directly, but
+# the next-step surcharge activates the prosumer storage response (D3
+# coupling) -- this is the channel that can move metric 3 (docs/DECISIONS.md's
+# D6 entry).
+extends: ../default.yaml
+
+scenario_name: capacity_pricing_only
+
+capacity_mechanism:
+  enabled: true
+  feedback_pnl: false
+  feedback_pricing: true
