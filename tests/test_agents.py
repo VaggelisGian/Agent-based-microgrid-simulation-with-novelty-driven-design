@@ -304,13 +304,21 @@ def test_demand_deferral_shifts_load_from_peak_to_later_hour():
     assert consumer.last_demand_kwh > 4.0
 
 
-def test_demand_deferral_conserves_daily_energy_total():
-    """Daily energy conservation: over a full 24h day with a mix of scarcity
-    and non-scarcity hours, total served demand equals total base demand
-    (deferral SHIFTS load, it never deletes it), and the bucket is fully
-    repaid by hour_of_day == 23."""
-    model = HarnessModel(horizon=24)
-    model.demand_profile[:] = [3.0 + (hour % 5) * 0.3 for hour in range(24)]
+def test_demand_deferral_conserves_energy_over_full_run():
+    """Phase 3c: the deferred bucket carries across midnight and drains at the
+    bounded payback rate whenever the surcharge is zero (the old hour_of_day
+    == 0 reset and hour_of_day == 23 forced repayment are gone -- that forced
+    dump concentrated evening-peak deferral into a single clock hour and
+    manufactured an artificial spike; see docs/DECISIONS.md D7 revision).
+    Energy conservation is therefore a RUN-level property, not a daily one:
+    over several days of a mix of scarcity and non-scarcity hours, total
+    served demand equals total base demand up to whatever small residual is
+    still sitting in the bucket when the run ends (deferral SHIFTS load, it
+    never deletes it, so base - served == the bucket's final balance
+    exactly)."""
+    horizon = 24 * 3
+    model = HarnessModel(horizon=horizon)
+    model.demand_profile[:] = [3.0 + (hour % 24 % 5) * 0.3 for hour in range(horizon)]
     model.capacity_response_reference_eur_per_kwh = 0.05
     model.capacity_deferrable_fraction = 0.3
     model.capacity_payback_cap_fraction = 0.4
@@ -321,15 +329,22 @@ def test_demand_deferral_conserves_daily_energy_total():
 
     total_base = 0.0
     total_served = 0.0
-    for hour in range(24):
+    for hour in range(horizon):
         model.current_hour = hour
-        model.broker_surcharges = {"b1": 0.06 if 17 <= hour <= 20 else 0.0}
+        hour_of_day = hour % 24
+        model.broker_surcharges = {"b1": 0.06 if 17 <= hour_of_day <= 20 else 0.0}
         total_base += model.demand_profile[hour]
         consumer.step()
         total_served += consumer.last_demand_kwh
 
-    assert total_served == pytest.approx(total_base, abs=1e-9)
-    assert consumer.deferred_kwh == pytest.approx(0.0, abs=1e-9)
+    # Exact conservation: nothing is created or destroyed, only shifted -- any
+    # gap between served and base energy is precisely the bucket's end-of-run
+    # balance.
+    assert total_base - total_served == pytest.approx(consumer.deferred_kwh, abs=1e-9)
+    # The end-of-run residual is a tiny fraction of the energy that moved
+    # through the deferral channel over the whole run, not a large stranded
+    # amount.
+    assert consumer.deferred_kwh < 0.05 * total_base
 
 
 def test_demand_deferral_defer_amount_matches_formula_exactly():

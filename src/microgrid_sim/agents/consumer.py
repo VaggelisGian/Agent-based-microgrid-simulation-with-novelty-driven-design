@@ -50,11 +50,14 @@ class Consumer(mesa.Agent):
         # reads it), so a broker's contribution to a step's feeder peak is
         # attributed to the broker that actually served that step's demand.
         self.last_broker_id = initial_broker.id
-        # Phase 3b (D7): intra-day deferred-energy bucket for the price-elastic
-        # demand-deferral channel (see _apply_demand_deferral). Reset to 0.0 at
-        # hour_of_day == 0; always exactly 0.0 whenever this agent's own
-        # broker's surcharge stays 0 all day, which is the
-        # capacity_disabled / capacity_pnl_only case.
+        # Phase 3b (D7, revised Phase 3c): deferred-energy bucket for the
+        # price-elastic demand-deferral channel (see _apply_demand_deferral).
+        # Carries across midnight (no hour-of-day reset) and drains at the
+        # bounded payback rate whenever the surcharge is zero, so evening-peak
+        # deferral repays into the true overnight valley instead of being
+        # forced into a single clock hour. Always exactly 0.0 whenever this
+        # agent's own broker's surcharge stays 0 for the whole run, which is
+        # the capacity_disabled / capacity_pnl_only case.
         self.deferred_kwh = 0.0
         # Run-level audit accumulator: total energy actually DEFERRED (moved
         # out of a scarcity hour), summed across the whole run; never
@@ -108,14 +111,20 @@ class Consumer(mesa.Agent):
         battery/PV logic sees the deferred/served demand, not raw base demand.
         Forecast-free (reacts only to the CURRENT surcharge), deterministic,
         draws no RNG. Inert (served == base every hour) whenever the
-        surcharge stays identically zero all day -- exactly the
+        surcharge stays identically zero for the whole run -- exactly the
         capacity_disabled / capacity_pnl_only case -- which preserves the
         baseline byte-for-byte.
-        """
-        hour_of_day = hour % 24
-        if hour_of_day == 0:
-            self.deferred_kwh = 0.0
 
+        The bucket carries across the day boundary and is not forced to
+        empty at any particular clock hour (Phase 3c: an earlier version
+        reset the bucket at hour_of_day == 0 and force-repaid any residual at
+        hour_of_day == 23; that dumped an evening peak's whole deferred
+        residual into a single shoulder hour, manufacturing an artificial
+        spike that could itself become the run's global peak). Energy
+        conservation is therefore a RUN-level property: total served demand
+        equals total base demand up to whatever is still sitting in the
+        bucket when the run ends.
+        """
         surcharge = self._current_capacity_surcharge()
 
         if surcharge > 0.0:
@@ -133,14 +142,6 @@ class Consumer(mesa.Agent):
             self.deferred_kwh -= payback_kwh
         else:
             served_kwh = base_kwh
-
-        # Daily energy conservation: any residual left in the bucket at the
-        # last hour of the day is repaid in full, so total served energy over
-        # each day equals total base demand over that day (deferral SHIFTS
-        # load, it never deletes it).
-        if hour_of_day == 23 and self.deferred_kwh > 0.0:
-            served_kwh += self.deferred_kwh
-            self.deferred_kwh = 0.0
 
         return served_kwh
 
