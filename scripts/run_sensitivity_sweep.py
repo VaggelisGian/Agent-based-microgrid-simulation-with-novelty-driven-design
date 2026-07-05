@@ -148,13 +148,27 @@ def _deterministic_jitter(seed: int, salt: int, magnitude: float = JITTER_MAGNIT
     """A pure, deterministic function of (seed, salt) in [-magnitude, +magnitude).
 
     Used only to perturb the bc=5 duplicate brokers' price parameters so they
-    are not identical to the originals. Uses a fixed linear-congruential-style
-    integer transform, not Python's salted hash() builtin and not a draw from
+    are not identical to the originals. Combines (seed, salt) into one 64-bit
+    word and runs the fixed splitmix64 finalizer (Vigna), whose avalanche gives
+    every input bit close to a 50 percent chance of flipping every output bit,
+    so even the sweep's 30 consecutive seeds map to well-spread jitter values
+    that take both signs. This replaces an earlier multiply-and-mod-10000
+    transform whose multiplier reduced to 3 mod 10000 and compressed 30
+    consecutive seeds into under 1 percent of the intended range (always
+    negative), which made the cheaper duplicate win essentially the whole
+    customer base of its broker type for every seed. Uses a fixed 64-bit
+    integer avalanche, NOT Python's salted hash() builtin and NOT a draw from
     the model's own seeded RNG stream, so it introduces no unseeded randomness
     and never perturbs the RNG sequence MicrogridModel itself consumes.
     """
-    combined = (seed * 1_000_003 + salt * 7_919) % 10_000
-    fraction = combined / 10_000.0  # deterministic value in [0, 1)
+    mask = (1 << 64) - 1
+    state = (seed * 0x9E3779B97F4A7C15 + salt * 0xD1B54A32D192ED03 + 0x2545F4914F6CDD1D) & mask
+    state ^= state >> 30
+    state = (state * 0xBF58476D1CE4E5B9) & mask
+    state ^= state >> 27
+    state = (state * 0x94D049BB133111EB) & mask
+    state ^= state >> 31
+    fraction = state / float(1 << 64)  # deterministic value in [0, 1)
     return magnitude * (2.0 * fraction - 1.0)
 
 
