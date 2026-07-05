@@ -178,7 +178,11 @@ def plot_archetypes(price_reg, price_grn, price_vol, out_path: Path) -> None:
         color=INK,
         fontsize=12,
     )
-    ax.legend(loc="upper right", frameon=False, fontsize=9)
+    legend = ax.legend(loc="upper right", frameon=False, fontsize=9)
+    # The volatile series is drawn very thin (0.5) so the flat lines read on top
+    # of it; give its legend swatch a visible width so identity is clear.
+    for handle in getattr(legend, "legend_handles", getattr(legend, "legendHandles", [])):
+        handle.set_linewidth(2.0)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
