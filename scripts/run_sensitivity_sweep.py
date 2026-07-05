@@ -183,6 +183,13 @@ def _build_broker_list(base_brokers: list[dict], broker_count: int, seed: int) -
     volatile = copy.deepcopy(by_type["volatile_low_cost"])
     green = copy.deepcopy(by_type["premium_green"])
 
+    if broker_count == 1:
+        # Single-broker monopoly baseline (the abstract's monopolistic broker).
+        # The regulated utility is the incumbent monopoly. Used only by the
+        # supplementary bc=1 arm (scripts/run_monopoly_arm.py), never by the
+        # main D8 grid (BROKER_COUNTS = 2, 3, 5). Every agent is served by this
+        # one broker; there is nowhere to switch, so switching_rate is 0.
+        return [regulated]
     if broker_count == 2:
         return [regulated, volatile]
     if broker_count == 3:
