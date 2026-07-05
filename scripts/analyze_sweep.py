@@ -22,6 +22,30 @@ x 3 broker_count values x 4 ablation configs x 30 seeds) and writes:
   - results/plots/fig_fire_rate.png
   - results/plots/fig_broker_heterogeneity.png
 
+If results/sweep_monopoly.parquet is also present (a supplementary broker_count = 1
+monopoly arm, same schema, 4 k values x 1 broker_count x 4 ablation configs x 30 seeds
+= 480 rows), the script additionally writes:
+
+  - results/monopoly_comparison.csv     one row per (broker_count in {1,2,3,5}, k in
+                                         {0.5,1.0,1.5,2.0}): the capacity_pricing_only
+                                         vs capacity_disabled paired comparison for
+                                         both metric-3 sub-measures (feeder CoV and
+                                         feeder peak-to-average), plus mean fire rate,
+                                         mean deferred energy, and the consumer-cost
+                                         percent change. Purpose: show whether the
+                                         metric-3 improvement is driven by the
+                                         capacity-charge MECHANISM (present even at
+                                         broker_count = 1, a monopoly with nowhere to
+                                         switch) or by broker COMPETITION (should
+                                         scale with broker_count).
+  - results/plots/fig_monopoly_comparison.png   two panels, CoV and peak-to-average
+                                         paired percent change vs broker_count, one
+                                         line per k, broker_count = 1 marked as the
+                                         monopoly reference point.
+
+If results/sweep_monopoly.parquet is absent, this section is skipped with a printed
+note; all other outputs are unaffected.
+
 Design notes (see docs/DECISIONS.md D6, D7, D8 and the Phase 5 observation section):
 
   - Seeds are SHARED across ablations at a given (k, broker_count), so ablation
@@ -73,8 +97,10 @@ from scipy import stats
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RAW_PATH = REPO_ROOT / "results" / "sweep_raw.parquet"
+MONOPOLY_PATH = REPO_ROOT / "results" / "sweep_monopoly.parquet"
 SUMMARY_PATH = REPO_ROOT / "results" / "summary_stats.csv"
 EFFECTS_PATH = REPO_ROOT / "results" / "effect_sizes.csv"
+MONOPOLY_COMPARISON_PATH = REPO_ROOT / "results" / "monopoly_comparison.csv"
 PLOTS_DIR = REPO_ROOT / "results" / "plots"
 
 # ---------------------------------------------------------------------------
@@ -83,6 +109,8 @@ PLOTS_DIR = REPO_ROOT / "results" / "plots"
 
 K_VALUES = (0.5, 1.0, 1.5, 2.0)
 BROKER_COUNTS = (2, 3, 5)
+MONOPOLY_BROKER_COUNT = 1
+ALL_BROKER_COUNTS = (MONOPOLY_BROKER_COUNT,) + BROKER_COUNTS
 DISABLED = "capacity_disabled"
 ABLATION_ORDER = ("capacity_disabled", "capacity_pnl_only", "capacity_pricing_only", "capacity_both")
 NON_DISABLED = ("capacity_pnl_only", "capacity_pricing_only", "capacity_both")
@@ -214,6 +242,40 @@ def load_raw() -> pd.DataFrame:
             f"{SEED_N} seeds), found {len(df)}."
         )
     return df
+
+
+def load_monopoly_combined(raw_df: pd.DataFrame) -> pd.DataFrame | None:
+    """Load results/sweep_monopoly.parquet (broker_count = 1) and concatenate it with
+    the already-loaded main sweep frame on the shared schema, for the monopoly-vs-
+    competition comparison.
+
+    Returns None (and prints a note) if results/sweep_monopoly.parquet does not exist,
+    so the rest of the script can run unaffected on machines/checkouts that only have
+    the main sweep.
+    """
+    if not MONOPOLY_PATH.exists():
+        print(
+            f"\nNOTE: {MONOPOLY_PATH} not found; skipping monopoly-vs-competition "
+            "comparison (results/monopoly_comparison.csv and "
+            "results/plots/fig_monopoly_comparison.png will not be written)."
+        )
+        return None
+
+    mono_df = pd.read_parquet(MONOPOLY_PATH)
+    expected_rows = len(K_VALUES) * 1 * len(ABLATION_ORDER) * SEED_N
+    if len(mono_df) != expected_rows:
+        print(
+            f"WARNING: expected {expected_rows} monopoly rows (4 k x 1 broker_count x "
+            f"4 ablation x {SEED_N} seeds), found {len(mono_df)}."
+        )
+    if set(mono_df["broker_count"].unique()) != {MONOPOLY_BROKER_COUNT}:
+        print(
+            f"WARNING: {MONOPOLY_PATH} contains broker_count values other than "
+            f"{MONOPOLY_BROKER_COUNT}: {sorted(mono_df['broker_count'].unique())}"
+        )
+
+    combined = pd.concat([raw_df, mono_df], ignore_index=True)
+    return combined
 
 
 def _cell_by_ablation(df: pd.DataFrame, k: float, broker_count: int) -> dict:
@@ -607,6 +669,110 @@ def plot_broker_heterogeneity(df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Deliverable (supplementary): results/monopoly_comparison.csv
+# ---------------------------------------------------------------------------
+
+COMPARISON_ABLATION = "capacity_pricing_only"
+
+
+def build_monopoly_comparison(combined_df: pd.DataFrame) -> pd.DataFrame:
+    """One row per (broker_count in {1,2,3,5}, k in {0.5,1.0,1.5,2.0}): the
+    capacity_pricing_only vs capacity_disabled paired-by-seed comparison for both
+    metric-3 sub-measures, plus supporting capacity_both / cost figures.
+
+    Purpose: separate the capacity-charge MECHANISM (should hold even at
+    broker_count = 1, a monopoly with no switching) from broker COMPETITION (should
+    scale with broker_count). See docs/DECISIONS.md and the Phase 8 monopoly note.
+    """
+    rows = []
+    for bc in ALL_BROKER_COUNTS:
+        for k in K_VALUES:
+            by_ablation = _cell_by_ablation(combined_df, k, bc)
+            disabled_frame = by_ablation[DISABLED]
+            pricing_frame = by_ablation[COMPARISON_ABLATION]
+            both_frame = by_ablation["capacity_both"]
+
+            row = {
+                "broker_count": bc,
+                "is_monopoly": bc == MONOPOLY_BROKER_COUNT,
+                "k": k,
+                "n_seeds": len(pricing_frame),
+            }
+
+            for metric in METRIC3_KEYS:
+                ablation_vals = pricing_frame[metric].to_numpy(dtype=float)
+                disabled_vals = disabled_frame[metric].reindex(pricing_frame.index).to_numpy(dtype=float)
+                paired = paired_comparison(ablation_vals, disabled_vals)
+                pct_paired, _pct_naive = paired_pct_change(ablation_vals, disabled_vals)
+                n_improved = int(np.sum(ablation_vals < disabled_vals))
+
+                row[f"{metric}_paired_mean_pct_change"] = pct_paired
+                row[f"{metric}_paired_dz"] = paired["d_z"]
+                row[f"{metric}_paired_p"] = paired["p_value"]
+                row[f"{metric}_n_improved_of_{len(ablation_vals)}"] = n_improved
+
+            # supporting figures at capacity_both: mean fire rate and mean deferred energy
+            row["capacity_both_mean_fire_rate"] = float(both_frame["capacity_fire_rate"].mean())
+            row["capacity_both_mean_total_deferred_kwh"] = float(both_frame["total_deferred_kwh"].mean())
+
+            # consumer cost: pricing_only vs disabled, paired percent change
+            cost_ablation_vals = pricing_frame["avg_cost_per_agent_eur"].to_numpy(dtype=float)
+            cost_disabled_vals = disabled_frame["avg_cost_per_agent_eur"].reindex(pricing_frame.index).to_numpy(dtype=float)
+            cost_pct_paired, _cost_pct_naive = paired_pct_change(cost_ablation_vals, cost_disabled_vals)
+            row["avg_cost_per_agent_eur_paired_mean_pct_change"] = cost_pct_paired
+
+            row["metric3_sign_convention"] = SIGN_CONVENTION_NOTE
+            row["note"] = (
+                f"{COMPARISON_ABLATION} vs {DISABLED}, paired by seed; "
+                "cost pct change is also pricing_only vs disabled (positive = costs more)"
+            )
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def plot_monopoly_comparison(comparison_df: pd.DataFrame) -> None:
+    fig, (ax_cov, ax_peak) = plt.subplots(1, 2, figsize=(12, 5.5), layout="constrained")
+    x = list(ALL_BROKER_COUNTS)
+
+    panels = [
+        (ax_cov, "feeder_coefficient_of_variation_paired_mean_pct_change", "Feeder coefficient of variation (CoV)"),
+        (ax_peak, "feeder_peak_to_average_ratio_paired_mean_pct_change", "Feeder peak-to-average ratio"),
+    ]
+    for ax, col, label in panels:
+        for k in K_VALUES:
+            line = comparison_df[comparison_df["k"] == k].sort_values("broker_count")
+            ax.plot(line["broker_count"], line[col], marker="o", label=f"k = {k:g}")
+        ax.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
+        ax.axvline(MONOPOLY_BROKER_COUNT, color="gray", linewidth=0.8, linestyle=":")
+        ax.set_xticks(x)
+        ax.set_xlabel("broker_count (1 = monopoly, no switching)")
+        ax.set_ylabel(f"{label}\npaired mean pct change, pricing_only vs disabled (%)")
+        ax.set_title(label)
+        ax.annotate(
+            "monopoly",
+            xy=(MONOPOLY_BROKER_COUNT, ax.get_ylim()[1]),
+            xytext=(MONOPOLY_BROKER_COUNT + 0.08, ax.get_ylim()[1]),
+            fontsize=8,
+            ha="left",
+            va="top",
+            style="italic",
+            color="gray",
+        )
+
+    handles, labels = ax_cov.get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=len(K_VALUES), frameon=False)
+    fig.suptitle(
+        "Monopoly (broker_count=1) vs competition: capacity_pricing_only vs capacity_disabled,\n"
+        "paired mean percent change by broker_count and k. Negative = improved stability.\n"
+        "Left: CoV improvement is nearly flat across broker_count (mechanism-driven).\n"
+        "Right: peak-to-average improvement grows with broker_count, absent at broker_count=1 (competition-dependent).",
+        fontsize=10,
+    )
+    fig.savefig(PLOTS_DIR / "fig_monopoly_comparison.png", dpi=150)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Diagnostics (stdout only; not written to any CSV)
 # ---------------------------------------------------------------------------
 
@@ -653,6 +819,15 @@ def main() -> None:
     print(f"wrote 4 PNGs to {PLOTS_DIR}")
 
     print_diagnostics(df, effects_df)
+
+    combined_df = load_monopoly_combined(df)
+    if combined_df is not None:
+        comparison_df = build_monopoly_comparison(combined_df)
+        comparison_df.to_csv(MONOPOLY_COMPARISON_PATH, index=False)
+        print(f"wrote {MONOPOLY_COMPARISON_PATH} ({len(comparison_df)} rows)")
+
+        plot_monopoly_comparison(comparison_df)
+        print(f"wrote {PLOTS_DIR / 'fig_monopoly_comparison.png'}")
 
 
 if __name__ == "__main__":
