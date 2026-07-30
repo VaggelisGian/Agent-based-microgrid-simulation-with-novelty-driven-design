@@ -30,14 +30,17 @@ from dataclasses import dataclass, field
 class CapacityStepResult:
     """Everything the mechanism computed for one hourly step.
 
-    threshold_eur is None while the rolling window is not yet full (no charge
-    can be levied yet). allocations_eur and surcharges_eur_per_kwh are keyed
+    threshold_kwh is None while the rolling window is not yet full (no charge
+    can be levied yet). It is a threshold on the feeder's own net import
+    (mean + k * std over the trailing window), so its unit is kWh, not EUR;
+    an earlier name of threshold_eur said otherwise and was wrong.
+    allocations_eur and surcharges_eur_per_kwh are keyed
     by the same broker ids as the contributions dict passed into step(), and
     are exactly 0.0 for every broker whenever total_charge_eur is 0.0 or no
     broker has a positive contribution.
     """
 
-    threshold_eur: float | None
+    threshold_kwh: float | None
     excess_kwh: float
     total_charge_eur: float
     allocations_eur: dict = field(default_factory=dict)
