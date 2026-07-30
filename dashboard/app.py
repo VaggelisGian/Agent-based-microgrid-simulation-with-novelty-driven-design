@@ -246,8 +246,8 @@ def _metrics_children() -> list:
             className="text-muted small",
             children=[
                 f"capacity charge so far: {metrics.total_capacity_charge_eur:.2f} EUR, ",
-                f"fire rate: {metrics.capacity_fire_rate:.1%}, ",
-                f"total deferred: {metrics.total_deferred_kwh:.1f} kWh",
+                f"fire rate: {metrics.capacity_fire_rate:.1%} of hours elapsed, ",
+                f"total deferred so far: {metrics.total_deferred_kwh:.1f} kWh",
             ],
         ),
     ]
