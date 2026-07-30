@@ -382,10 +382,22 @@ def _extract_opsd_hourly_consumption(
     decrease (a reset) is found inside the chosen window, since both would
     mean the "gap-free, monotone" property this window was selected for did
     not actually hold and the series must not be built silently anyway.
+
+    Interval labelling: OPSD's own datapackage.json defines utc_timestamp as
+    the START of the timeperiod that row covers. The consumption value
+    produced by diffing row t and row t+1 (counter[t+1] - counter[t]) is the
+    energy used DURING the interval that starts at row t's timestamp, so it
+    is tagged with row t's timestamp (the previous row, carried as prev_ts
+    below), never row t+1's. Tagging it with row t+1's timestamp (the
+    interval's END) would silently shift every value one hour later than it
+    belongs, which is exactly the bug this docstring exists to prevent
+    reintroducing: it was caught in review before this series was ever used
+    in a run.
     """
     usecols = ["utc_timestamp"] + columns
     reader = pd.read_csv(raw_csv_path, usecols=usecols, chunksize=chunk_rows)
     prev_values: np.ndarray | None = None
+    prev_ts = None
     consumption: list[float] = []
     timestamps: list = []
     row_idx = 0
@@ -409,8 +421,9 @@ def _extract_opsd_hourly_consumption(
                             f"window at row {row_idx + lo + i}"
                         )
                     consumption.append(float(diffs.sum()))
-                    timestamps.append(ts[i])
+                    timestamps.append(prev_ts)  # interval START (the previous row), not this row (the interval END)
                 prev_values = values[i]
+                prev_ts = ts[i]
         row_idx += n
         if row_idx > end_idx:
             break

@@ -6,6 +6,7 @@ from microgrid_sim.data.loaders import (
     DataLoadError,
     OpsdFetchError,
     _align_to_utc_midnight_multiple_of_24,
+    _extract_opsd_hourly_consumption,
     _validate_opsd_alignment,
     generate_synthetic_demand,
     generate_synthetic_solar,
@@ -379,13 +380,41 @@ def test_shipped_opsd_cache_length_is_multiple_of_24_and_starts_at_midnight():
 
 
 def test_shipped_opsd_cache_evening_peak_and_overnight_trough_align_with_synthetic_and_solar():
-    # Pins the fix: before it, the OPSD series peaked at index 5 (early
-    # morning) and troughed at index 14 (mid-afternoon), roughly 12-14 hours
-    # out of phase with both the synthetic demand series and the solar
-    # series' own hour-of-day convention (index 0 == 00:00 UTC). After the
-    # fix, OPSD's peak should fall in a plausible evening band and its
-    # trough overnight, like the synthetic series and consistent with
-    # solar's own zero-generation deep-night hours.
+    # History of two bugs this test guards against, in the order they were
+    # found (both in review, before either shipped series was used in a
+    # run):
+    #
+    # 1. Before _align_to_utc_midnight_multiple_of_24 existed, the OPSD
+    #    series was not aligned to a UTC-midnight boundary at all: it peaked
+    #    at index 5 (early morning) and troughed at index 14
+    #    (mid-afternoon), roughly 12-14 hours out of phase with the
+    #    synthetic demand series and with solar's own hour-of-day
+    #    convention. The evening_band/overnight_band checks below were
+    #    written to catch a regression of that.
+    #
+    # 2. A second, one-hour bug in _extract_opsd_hourly_consumption (fixed
+    #    later: interval consumption values were tagged with the LATER
+    #    row's timestamp instead of the interval-START timestamp OPSD's own
+    #    datapackage.json documents) shifted every value one hour later than
+    #    it belonged, moving the peak from 16 to 17 and the trough from 1 to
+    #    2. Both of those still land inside the 6-hour-wide bands below, so
+    #    this test passed straight through that bug without catching it.
+    #
+    # The exact-hour assertions below close that gap: they pin the peak and
+    # trough to the specific hours the corrected pipeline produces, so a
+    # one-hour (or few-hour) phase regression fails here instead of passing.
+    #
+    # What this test CAN catch: any drift of the shipped cache's phase away
+    # from the pinned hours, including a one-hour shift like bug 2 above.
+    # What it CANNOT catch: it checks the shipped, already-built cache file
+    # for consistency/regression; it does not independently re-derive ground
+    # truth from the raw OPSD file (which is deleted after every fetch and
+    # is not available at test time), so it cannot distinguish "correct" from
+    # "wrong in a way that was baked into the pinned expectation itself".
+    # test_extract_opsd_hourly_consumption_labels_intervals_by_interval_start_timestamp
+    # below closes that remaining gap: it checks the labelling convention
+    # directly, against a small synthetic counter with known timestamps, with
+    # no dependency on the shipped cache at all.
     opsd = _mean_by_hour_of_day("data/samples/residential_demand_opsd_hourly.csv")
     synthetic = _mean_by_hour_of_day("data/samples/residential_demand_thessaloniki_hourly.csv")
     solar = _mean_by_hour_of_day("data/samples/solar_thessaloniki_hourly.csv")
@@ -393,6 +422,15 @@ def test_shipped_opsd_cache_evening_peak_and_overnight_trough_align_with_synthet
     opsd_peak_hour = int(np.argmax(opsd))
     opsd_trough_hour = int(np.argmin(opsd))
     synthetic_peak_hour = int(np.argmax(synthetic))
+
+    df = pd.read_csv("data/samples/residential_demand_opsd_hourly.csv", comment="#")
+    assert len(df) % 24 == 0, "shipped OPSD cache length must be a whole multiple of 24 hours"
+
+    # Exact-hour pins, not a band: re-derive with _mean_by_hour_of_day above
+    # if data/samples/residential_demand_opsd_hourly.csv is ever legitimately
+    # refreshed; do not loosen this to make a real phase regression pass.
+    assert opsd_peak_hour == 16, f"OPSD peak hour {opsd_peak_hour} != 16 (pinned); check for a phase regression"
+    assert opsd_trough_hour == 1, f"OPSD trough hour {opsd_trough_hour} != 1 (pinned); check for a phase regression"
 
     evening_band = set(range(16, 23))  # 16:00-22:00, a generous plausible evening-peak window
     overnight_band = set(range(0, 6))  # 00:00-05:00, a generous plausible overnight-trough window
@@ -402,8 +440,8 @@ def test_shipped_opsd_cache_evening_peak_and_overnight_trough_align_with_synthet
         f"OPSD trough hour {opsd_trough_hour} is not in the overnight band {sorted(overnight_band)}"
     )
     # Both series' peaks should fall within a few hours of each other, not on
-    # opposite sides of the clock (the pre-fix bug put them about 12 hours
-    # apart: synthetic peak 20, buggy OPSD peak 5).
+    # opposite sides of the clock (the original pre-alignment bug put them
+    # about 12 hours apart: synthetic peak 20, buggy OPSD peak 5).
     hour_gap = min(abs(opsd_peak_hour - synthetic_peak_hour), 24 - abs(opsd_peak_hour - synthetic_peak_hour))
     assert hour_gap <= 6, f"OPSD peak hour {opsd_peak_hour} and synthetic peak hour {synthetic_peak_hour} are {hour_gap}h apart"
 
@@ -413,3 +451,52 @@ def test_shipped_opsd_cache_evening_peak_and_overnight_trough_align_with_synthet
     # same index-0-is-00:00-UTC clock.
     solar_zero_hours = {h for h in range(24) if solar[h] < 1e-9}
     assert opsd_peak_hour not in solar_zero_hours
+
+
+def test_extract_opsd_hourly_consumption_labels_intervals_by_interval_start_timestamp(tmp_path):
+    """Direct unit test of the interval-labelling convention documented in
+    _extract_opsd_hourly_consumption: OPSD's datapackage.json defines
+    utc_timestamp as the START of the hour a row covers, so the consumption
+    value obtained by differencing row i and row i+1 (energy used DURING
+    that hour) must be tagged with row i's timestamp (the interval start),
+    never row i+1's (the interval end). Tagging with the later row's
+    timestamp is exactly the bug this test exists to catch: it silently
+    shifted every OPSD demand value one hour later than it belonged, and it
+    was found in review before the series was ever used in a run (see
+    docs/DECISIONS.md, "Data provenance").
+
+    Uses a small synthetic cumulative counter with known, hand-picked
+    timestamps (no network access, no dependency on the real OPSD file) and
+    a deliberately small chunk_rows so one of the expected diffs straddles a
+    chunk boundary, exercising the prev_ts carry across chunks, the exact
+    mechanism the original bug lived in.
+    """
+    timestamps = pd.date_range("2020-01-01T00:00:00Z", periods=10, freq="h")
+    counter = 100.0 + np.arange(10, dtype=float)  # cumulative meter reading, +1.0 kWh every hour
+    raw_path = tmp_path / "fake_opsd_raw.csv"
+    pd.DataFrame({"utc_timestamp": timestamps.astype(str), "meter": counter}).to_csv(raw_path, index=False)
+
+    # chunk_rows=3 puts chunk boundaries after rows 2, 5, and 8 (0-based), so
+    # the diff between row 2 (last row of the first chunk) and row 3 (first
+    # row of the second chunk) can only be labelled correctly if prev_ts
+    # survives the chunk boundary rather than resetting with each chunk.
+    consumption, out_timestamps = _extract_opsd_hourly_consumption(
+        raw_path, ["meter"], start_idx=0, end_idx=9, chunk_rows=3
+    )
+
+    assert consumption.size == 9  # 10 rows -> 9 row-to-row diffs
+    assert np.allclose(consumption, 1.0)
+
+    # Every returned timestamp must be the START of its interval: for the
+    # diff between row i and row i+1, that is row i's timestamp.
+    expected_start_timestamps = timestamps[:-1]
+    actual_start_timestamps = pd.to_datetime(out_timestamps, utc=True)
+    assert list(actual_start_timestamps) == list(expected_start_timestamps), (
+        "each returned timestamp must be the interval START (the earlier row), not the interval "
+        "END (the later row); a mismatch here means the one-hour mislabelling bug is back"
+    )
+
+    # The chunk-boundary diff specifically (row 2 -> row 3): must be tagged
+    # with row 2's timestamp (02:00), not row 3's (03:00).
+    boundary_diff_index = 2
+    assert pd.Timestamp(str(out_timestamps[boundary_diff_index])) == timestamps[2]
