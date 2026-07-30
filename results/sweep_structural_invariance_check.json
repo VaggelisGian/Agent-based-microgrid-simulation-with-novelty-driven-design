@@ -1,0 +1,362 @@
+{
+  "canonical_coefficients": {
+    "deferrable_fraction": 0.2,
+    "payback_cap_fraction": 0.5,
+    "response_reference_eur_per_kwh": 0.05
+  },
+  "invariant": true,
+  "max_abs_divergence_per_column": {
+    "avg_cost_per_agent_eur": 0.0,
+    "avg_cost_per_kwh_eur": 0.0,
+    "broker_load_share_gini": 0.0,
+    "capacity_fire_rate": 0.0,
+    "feeder_coefficient_of_variation": 0.0,
+    "feeder_mean_hourly_ramp_kwh": 0.0,
+    "feeder_peak_to_average_ratio": 0.0,
+    "load_concentration_hhi": 0.0,
+    "n_brokers": 0.0,
+    "prosumer_self_sufficiency": 0.0,
+    "switching_rate": 0.0,
+    "total_capacity_charge_eur": 0.0,
+    "total_deferred_kwh": 0.0
+  },
+  "n_cells_checked": 8,
+  "n_seeds_checked": 5,
+  "n_verification_runs": 40,
+  "note": "invariant=true means every verification run reproduced its canonical same-seed row to within a floating-point noise floor (abs 1e-9 plus rel 1e-9; see _check_invariance for why bit-exact comparison produced false alarms across separate process launches); this is the empirical check behind D9's disabled-arm reuse (docs/DECISIONS.md).",
+  "per_cell_max_abs_divergence": [
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260708
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260708
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260708
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.05,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260708
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260708
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260705
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260704
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260706
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.0125,
+      "seed": 20260708
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260707
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 0.25,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260708
+    },
+    {
+      "deferrable_fraction": 0.3,
+      "max_abs_divergence": 0.0,
+      "payback_cap_fraction": 1.0,
+      "response_reference_eur_per_kwh": 0.2,
+      "seed": 20260708
+    }
+  ],
+  "string_column_mismatches": {
+    "broker_load_share_json": 0,
+    "mean_broker_surcharge_json": 0
+  },
+  "verification_cells": [
+    [
+      0.05,
+      0.0125,
+      0.25
+    ],
+    [
+      0.05,
+      0.0125,
+      1.0
+    ],
+    [
+      0.05,
+      0.2,
+      0.25
+    ],
+    [
+      0.05,
+      0.2,
+      1.0
+    ],
+    [
+      0.3,
+      0.0125,
+      0.25
+    ],
+    [
+      0.3,
+      0.0125,
+      1.0
+    ],
+    [
+      0.3,
+      0.2,
+      0.25
+    ],
+    [
+      0.3,
+      0.2,
+      1.0
+    ]
+  ],
+  "verification_seeds": [
+    20260704,
+    20260705,
+    20260706,
+    20260707,
+    20260708
+  ]
+}
