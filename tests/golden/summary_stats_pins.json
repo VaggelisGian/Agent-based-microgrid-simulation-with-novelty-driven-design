@@ -1,0 +1,147 @@
+{
+  "_comment": "Pinned digest of results/summary_stats.csv (the Phase 5/6 capacity-mechanism sweep) at k=1.0, broker_count=3, across all four ablations. results/summary_stats.csv is read-only input here and is never written by this script; only this pinned snapshot is written. Regenerate DELIBERATELY, never automatically, only after a verified intentional sweep rerun, by running from the repository root: python scripts/regenerate_golden_master.py",
+  "broker_count": 3,
+  "k": 1.0,
+  "rows": [
+    {
+      "ablation": "capacity_both",
+      "mean": 633.9288731549743,
+      "metric": "avg_cost_per_agent_eur",
+      "n_seeds": 30,
+      "std": 18.559447551638574
+    },
+    {
+      "ablation": "capacity_both",
+      "mean": 0.6294909524700021,
+      "metric": "feeder_coefficient_of_variation",
+      "n_seeds": 30,
+      "std": 0.0209298106351031
+    },
+    {
+      "ablation": "capacity_both",
+      "mean": 3.16355845908772,
+      "metric": "feeder_peak_to_average_ratio",
+      "n_seeds": 30,
+      "std": 0.0411921648664847
+    },
+    {
+      "ablation": "capacity_both",
+      "mean": 0.3610091965668331,
+      "metric": "load_concentration_hhi",
+      "n_seeds": 30,
+      "std": 0.012674733340118
+    },
+    {
+      "ablation": "capacity_both",
+      "mean": 0.7293018014202323,
+      "metric": "prosumer_self_sufficiency",
+      "n_seeds": 30,
+      "std": 0.0216773133047176
+    },
+    {
+      "ablation": "capacity_disabled",
+      "mean": 598.249374602719,
+      "metric": "avg_cost_per_agent_eur",
+      "n_seeds": 30,
+      "std": 18.210696996460843
+    },
+    {
+      "ablation": "capacity_disabled",
+      "mean": 0.6783863359958116,
+      "metric": "feeder_coefficient_of_variation",
+      "n_seeds": 30,
+      "std": 0.0196248497691532
+    },
+    {
+      "ablation": "capacity_disabled",
+      "mean": 3.5093832824282964,
+      "metric": "feeder_peak_to_average_ratio",
+      "n_seeds": 30,
+      "std": 0.0492311258073076
+    },
+    {
+      "ablation": "capacity_disabled",
+      "mean": 0.3609783929667229,
+      "metric": "load_concentration_hhi",
+      "n_seeds": 30,
+      "std": 0.0126595606414205
+    },
+    {
+      "ablation": "capacity_disabled",
+      "mean": 0.7302637130845901,
+      "metric": "prosumer_self_sufficiency",
+      "n_seeds": 30,
+      "std": 0.0216637986662286
+    },
+    {
+      "ablation": "capacity_pnl_only",
+      "mean": 598.249374602719,
+      "metric": "avg_cost_per_agent_eur",
+      "n_seeds": 30,
+      "std": 18.210696996460843
+    },
+    {
+      "ablation": "capacity_pnl_only",
+      "mean": 0.6783863359958116,
+      "metric": "feeder_coefficient_of_variation",
+      "n_seeds": 30,
+      "std": 0.0196248497691532
+    },
+    {
+      "ablation": "capacity_pnl_only",
+      "mean": 3.5093832824282973,
+      "metric": "feeder_peak_to_average_ratio",
+      "n_seeds": 30,
+      "std": 0.0492311258073075
+    },
+    {
+      "ablation": "capacity_pnl_only",
+      "mean": 0.360978392966723,
+      "metric": "load_concentration_hhi",
+      "n_seeds": 30,
+      "std": 0.0126595606414205
+    },
+    {
+      "ablation": "capacity_pnl_only",
+      "mean": 0.7302637130845901,
+      "metric": "prosumer_self_sufficiency",
+      "n_seeds": 30,
+      "std": 0.0216637986662286
+    },
+    {
+      "ablation": "capacity_pricing_only",
+      "mean": 633.9288731549743,
+      "metric": "avg_cost_per_agent_eur",
+      "n_seeds": 30,
+      "std": 18.559447551638574
+    },
+    {
+      "ablation": "capacity_pricing_only",
+      "mean": 0.6294909524700021,
+      "metric": "feeder_coefficient_of_variation",
+      "n_seeds": 30,
+      "std": 0.0209298106351031
+    },
+    {
+      "ablation": "capacity_pricing_only",
+      "mean": 3.16355845908772,
+      "metric": "feeder_peak_to_average_ratio",
+      "n_seeds": 30,
+      "std": 0.0411921648664847
+    },
+    {
+      "ablation": "capacity_pricing_only",
+      "mean": 0.3610091965668331,
+      "metric": "load_concentration_hhi",
+      "n_seeds": 30,
+      "std": 0.012674733340118
+    },
+    {
+      "ablation": "capacity_pricing_only",
+      "mean": 0.7293018014202323,
+      "metric": "prosumer_self_sufficiency",
+      "n_seeds": 30,
+      "std": 0.0216773133047176
+    }
+  ]
+}
