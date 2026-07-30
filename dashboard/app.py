@@ -211,14 +211,26 @@ def _metrics_children() -> list:
     share_rows = [
         html.Li(f"{names.get(broker_id, broker_id)}: {share:.1%}") for broker_id, share in metrics.broker_load_share.items()
     ]
+    # Metric 1 is a running cumulative total, not an annual rate: it keeps
+    # growing as the run advances and only equals the thesis's EUR/year figure
+    # once the full 8760-hour horizon has actually been simulated. Labelling a
+    # partial run "EUR/year" would put a number on screen (for example about
+    # 189 at hour 2000) that an examiner could read against Chapter 6's 633.93
+    # EUR/year for this same cell and conclude the demo contradicts the thesis.
+    # So the unit is only claimed once it is earned. avg_cost_per_kwh_eur is a
+    # ratio and is meaningful at any point, so it is shown throughout.
+    run_complete = session.model.current_hour >= session.model.horizon_hours
+    if run_complete:
+        cost_text = f"{metrics.avg_cost_per_agent_eur:.2f} EUR/year  ({metrics.avg_cost_per_kwh_eur:.4f} EUR/kWh)"
+    else:
+        cost_text = (
+            f"{metrics.avg_cost_per_agent_eur:.2f} EUR cumulative over "
+            f"{session.model.current_hour} h of {session.model.horizon_hours} "
+            f"({metrics.avg_cost_per_kwh_eur:.4f} EUR/kWh)"
+        )
     return [
         html.H5("Four thesis metrics (live)", className="card-title"),
-        html.Div(
-            [
-                html.B("1. avg cost/agent: "),
-                f"{metrics.avg_cost_per_agent_eur:.2f} EUR/year  ({metrics.avg_cost_per_kwh_eur:.4f} EUR/kWh)",
-            ]
-        ),
+        html.Div([html.B("1. avg cost/agent: "), cost_text]),
         html.Div([html.B("2. load distribution: "), html.Ul(share_rows, className="mb-1"), f"HHI = {metrics.load_concentration_hhi:.3f}"]),
         html.Div(
             [
