@@ -12,7 +12,10 @@ things, matching the five invariants the mechanism's own design log claims:
      series itself, because the P&L channel writes nothing into prices;
   3. the byte-for-byte baseline invariant: with the capacity master flag off,
      the model reproduces the plain baseline exactly, whether the
-     capacity_mechanism block is absent or present-but-disabled;
+     capacity_mechanism block is absent or present-but-disabled (these two
+     tests compare the whole MetricsResult, so they pin the Phase 5/6
+     audit-only fields such as total_capacity_charge_eur and
+     capacity_fire_rate as well, not just the four thesis metrics);
   4. the cross-broker heterogeneity invariant: a strictly larger contribution
      share yields a strictly larger surcharge, both on the mechanism directly
      and in a real short model run;
