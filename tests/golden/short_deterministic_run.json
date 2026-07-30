@@ -1,0 +1,34 @@
+{
+  "_comment": "Golden-master pins for tests/test_golden_master.py's short deterministic run (item 1 of the harness). Regenerate DELIBERATELY, never automatically, by running from the repository root: python scripts/regenerate_golden_master.py",
+  "capacity_both": {
+    "avg_cost_per_agent_eur": 53.45601284794897,
+    "avg_cost_per_kwh_eur": 0.19124415080368828,
+    "broker_load_share": {
+      "premium_green": 0.2374903301512377,
+      "regulated_utility": 0.3358400458797152,
+      "volatile_low_cost": 0.426669623969047
+    },
+    "feeder_coefficient_of_variation": 0.49028758616183626,
+    "feeder_mean_hourly_ramp_kwh": 6.701437568286933,
+    "feeder_peak_to_average_ratio": 2.3510323156385082,
+    "load_concentration_hhi": 0.3512371613497211,
+    "prosumer_self_sufficiency": 0.5260454682942199
+  },
+  "capacity_disabled": {
+    "avg_cost_per_agent_eur": 51.73648795578045,
+    "avg_cost_per_kwh_eur": 0.18499723238694754,
+    "broker_load_share": {
+      "premium_green": 0.23736406413906944,
+      "regulated_utility": 0.3358356579941071,
+      "volatile_low_cost": 0.42680027786682345
+    },
+    "feeder_coefficient_of_variation": 0.5239902753051148,
+    "feeder_mean_hourly_ramp_kwh": 6.27938434306804,
+    "feeder_peak_to_average_ratio": 2.458038384781107,
+    "load_concentration_hhi": 0.35128576531214883,
+    "prosumer_self_sufficiency": 0.5256629988466164
+  },
+  "scenario_horizon_hours": 504,
+  "scenario_num_agents": 50,
+  "scenario_seed": 101
+}
