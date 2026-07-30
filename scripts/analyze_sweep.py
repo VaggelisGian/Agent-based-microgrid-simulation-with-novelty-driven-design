@@ -1112,6 +1112,14 @@ def build_corrected_summary(df: pd.DataFrame, mono_df: pd.DataFrame | None) -> p
             rows[i]["correction_family_size"] = len(idxs)
 
     # --- bootstrap CI + t-vs-bootstrap disagreement flag, every row ---
+    # One Generator is threaded through every row rather than reseeded per row,
+    # so the draws for row n depend on how many rows preceded it. That is
+    # reproducible, but only while the row-building order above stays fixed:
+    # reordering those loops would silently change every bootstrap interval in
+    # the output without changing a single input. If the row order ever needs
+    # to change, seed per row from a stable key (the grouping tuple) instead of
+    # sharing this one, so an interval depends on which comparison it is and
+    # not on where it happens to sit in the list.
     rng = np.random.default_rng(BOOTSTRAP_SEED)
     for r in rows:
         boot_lo, boot_hi = bootstrap_paired_diff_ci(r["_diff"], rng)
