@@ -823,7 +823,7 @@ def plot_broker_heterogeneity(df: pd.DataFrame) -> None:
     ax_bar.bar(x, surcharge_mean.to_numpy(), yerr=surcharge_std.to_numpy(), capsize=4, color=_DEFAULT_COLORS[: len(broker_order)])
     ax_bar.set_xticks(x)
     ax_bar.set_xticklabels(broker_order, rotation=20)
-    ax_bar.set_ylabel("mean broker surcharge (signal-strength units, not EUR/kWh)")
+    ax_bar.set_ylabel("mean broker surcharge (EUR/kWh quote adder)")
     ax_bar.set_title(f"Per-broker mean surcharge\n(k={k_ref}, broker_count={bc_ref}, {ablation_ref}, n={len(sub)} seeds)")
 
     for i, broker in enumerate(broker_order):
@@ -838,13 +838,13 @@ def plot_broker_heterogeneity(df: pd.DataFrame) -> None:
             label=broker,
         )
     ax_scatter.set_xlabel("mean load share")
-    ax_scatter.set_ylabel("mean surcharge (signal-strength units)")
+    ax_scatter.set_ylabel("mean surcharge (EUR/kWh)")
     ax_scatter.set_title("Load share vs surcharge (monotone: bigger contributor,\nstrictly bigger surcharge)")
     ax_scatter.legend()
 
     fig.suptitle(
-        "Broker heterogeneity under capacity_both: surcharge is a signal-strength adder "
-        "(capacity_passthrough x contribution share), NOT a EUR/kWh price",
+        "Broker heterogeneity under capacity_both: the surcharge is a EUR/kWh quote adder, "
+        "equal to capacity_passthrough (a signal-strength coefficient, not a tariff rate) x contribution share",
         fontsize=10,
     )
     fig.savefig(PLOTS_DIR / "fig_broker_heterogeneity.png", dpi=150)
