@@ -156,7 +156,7 @@ def test_window_not_filled_total_charge_is_zero():
     mechanism = CapacityMechanism(window=4, k=1.0, charge_rate_eur_per_kwh=0.5, capacity_passthrough=0.1)
     for value in (10.0, 100.0, 1000.0):  # only 3 samples for a window of 4
         result = mechanism.step(value, {"a": value})
-        assert result.threshold_eur is None
+        assert result.threshold_kwh is None
         assert result.excess_kwh == 0.0
         assert result.total_charge_eur == 0.0
         assert result.allocations_eur == {"a": 0.0}
@@ -199,7 +199,7 @@ def test_feeder_net_import_above_threshold_gives_exact_excess_and_charge():
     expected_charge = charge_rate * expected_excess
 
     assert expected_excess > 0.0  # sanity: this construction must actually exceed threshold
-    assert result.threshold_eur == pytest.approx(expected_threshold, abs=1e-9)
+    assert result.threshold_kwh == pytest.approx(expected_threshold, abs=1e-9)
     assert result.excess_kwh == pytest.approx(expected_excess, abs=1e-9)
     assert result.total_charge_eur == pytest.approx(expected_charge, abs=1e-9)
 
@@ -212,7 +212,7 @@ def test_zero_excess_hour_yields_zero_total_charge_exactly_at_boundary():
     mechanism = CapacityMechanism(window=2, k=1.0, charge_rate_eur_per_kwh=5.0, capacity_passthrough=0.1)
     mechanism.step(0.0, {"a": 0.0})  # window not filled yet
     result = mechanism.step(10.0, {"a": 10.0})  # window = [0, 10]; mean=5, std=5, threshold=10
-    assert result.threshold_eur == pytest.approx(10.0, abs=1e-12)
+    assert result.threshold_kwh == pytest.approx(10.0, abs=1e-12)
     assert result.excess_kwh == 0.0
     assert result.total_charge_eur == 0.0
 

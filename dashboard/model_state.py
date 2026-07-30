@@ -222,7 +222,7 @@ class DemoSession:
 
         if self._capacity_history:
             result = self._capacity_history[-1]
-            self.threshold.append(result.threshold_eur)
+            self.threshold.append(result.threshold_kwh)
             self.scarcity.append(result.excess_kwh > 0.0)
         else:
             self.threshold.append(None)
