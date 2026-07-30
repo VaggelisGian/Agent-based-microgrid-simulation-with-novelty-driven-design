@@ -46,6 +46,30 @@ monopoly arm, same schema, 4 k values x 1 broker_count x 4 ablation configs x 30
 If results/sweep_monopoly.parquet is absent, this section is skipped with a printed
 note; all other outputs are unaffected.
 
+This script additionally writes:
+
+  - results/summary_stats_corrected.csv   multiple-comparison correction (Holm-Bonferroni
+                                  primary, Benjamini-Hochberg FDR secondary) and 10000-resample
+                                  seed-level paired bootstrap 95 percent CIs, alongside the
+                                  existing t-based CIs and uncorrected p-values, for every paired
+                                  comparison in the correction family. The family is reported two
+                                  ways (see build_corrected_summary()'s docstring for the full
+                                  reasoning): FAMILY_SIZE_PRIMARY = 120 real, computed paired
+                                  t-tests in the main D8 sweep (capacity_pricing_only and
+                                  capacity_both vs capacity_disabled, 5 metrics x 4 k x 3
+                                  broker_count), and FAMILY_SIZE_ALTERNATIVE = 180, which folds in
+                                  the 60 capacity_pnl_only vs capacity_disabled contrasts that are
+                                  deterministic identities (exact zero paired difference, p=1.0 by
+                                  convention, not a computed test) rather than real hypothesis
+                                  tests. The supplementary broker_count=1 monopoly arm's own 8
+                                  real tests (results/monopoly_comparison.csv) are corrected as a
+                                  separate SECONDARY family (FAMILY_SIZE_MONOPOLY_SECONDARY = 8),
+                                  not pooled into the primary 120, since it is a later addition
+                                  analyzed in its own file, not part of the D8 sweep grid itself.
+                                  This file is purely additive: new output only, and building it
+                                  does not alter anything build_summary_stats() or
+                                  build_effect_sizes() compute or write.
+
 Design notes (see docs/DECISIONS.md D6, D7, D8 and the Phase 5 observation section):
 
   - Seeds are SHARED across ablations at a given (k, broker_count), so ablation
@@ -143,6 +167,52 @@ SIGN_CONVENTION_NOTE = (
     "stability (lower CoV / lower peak-to-average ratio); positive means worsened."
 )
 
+CORRECTED_SUMMARY_PATH = REPO_ROOT / "results" / "summary_stats_corrected.csv"
+
+# ---------------------------------------------------------------------------
+# Multiple-comparison correction and bootstrap CI constants
+# ---------------------------------------------------------------------------
+#
+# Family definition. The PRIMARY correction family is the 120 REAL, computed
+# paired t-tests in the main D8 sweep: capacity_pricing_only and capacity_both
+# vs capacity_disabled, each of the 5 thesis-relevant metrics, at each of the
+# 4 k values and 3 broker counts (2 ablations x 5 metrics x 4 k x 3
+# broker_count = 120). It excludes the 60 capacity_pnl_only vs
+# capacity_disabled contrasts (1 ablation x 5 metrics x 4 k x 3 broker_count):
+# those are DETERMINISTIC IDENTITIES the model guarantees by construction (the
+# P&L channel debits a ledger and writes nothing into any price or physical
+# quantity, so its paired difference on every metric is exactly 0 for every
+# seed), not estimated hypothesis tests -- paired_comparison()'s `degenerate`
+# branch sets p=1.0 by convention rather than computing it from a
+# zero-variance t-test. Folding a deterministic identity into a correction
+# family cannot guard against any real false-positive risk (a p=1.0 entry can
+# never survive any correction) while it does dilute the correction budget
+# available to the tests that are actual estimates, so these are excluded
+# from the primary family and reported separately, in full, for auditability
+# (the ALTERNATIVE family size below, which simply adds them back in).
+#
+# The supplementary broker_count=1 monopoly arm (Phase 8, results/
+# monopoly_comparison.csv) is a later addition, analyzed in its own separate
+# output file, and is not part of "the sweep" as D8 defines it (broker_count
+# in {2, 3, 5}). Its own 8 real paired tests (capacity_pricing_only vs
+# capacity_disabled, both metric-3 sub-metrics, 4 k values -- the only
+# monopoly comparisons already quoted as evidence in
+# docs/thesis/06_results.md Section 6.9 and qa_prep.md question C5) are
+# corrected as their own SECONDARY family, not pooled into the primary 120, so
+# that a later supplementary arm can never silently shrink or inflate the
+# primary family's correction budget.
+FAMILY_SIZE_PRIMARY = 120  # main-sweep real tests only (excludes the 60 degenerate pnl_only contrasts)
+FAMILY_SIZE_ALTERNATIVE = 180  # main-sweep real (120) + main-sweep degenerate (60); for auditability
+FAMILY_SIZE_MONOPOLY_SECONDARY = 8  # bc=1 supplementary arm, corrected separately, see note above
+
+ALPHA = 0.05
+BOOTSTRAP_SEED = 20260704  # the project's canonical run seed, reused here (see docs/DECISIONS.md
+                            # F1-F4 fix notes for its other appearances) purely to seed the bootstrap
+                            # resampling RNG below; it draws no simulation data and touches no model
+                            # RNG stream.
+N_BOOTSTRAP = 10000
+CI_DISAGREEMENT_WIDTH_RATIO = 2.0  # flag a disagreement if one CI is >= 2x the width of the other
+
 # Default matplotlib color cycle, fixed per ablation so colors are consistent across figures.
 _DEFAULT_COLORS = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 ABLATION_COLOR = {ablation: _DEFAULT_COLORS[i % len(_DEFAULT_COLORS)] for i, ablation in enumerate(ABLATION_ORDER)}
@@ -226,6 +296,119 @@ def active_broker_count(load_share_json: str, tol: float = 1e-9) -> int:
     """Number of brokers with a positive (> tol) load share, parsed from broker_load_share_json."""
     shares = json.loads(load_share_json)
     return sum(1 for v in shares.values() if v > tol)
+
+
+# ---------------------------------------------------------------------------
+# Multiple-comparison correction (Holm-Bonferroni primary, BH FDR secondary)
+# ---------------------------------------------------------------------------
+
+
+def holm_bonferroni(pvals) -> np.ndarray:
+    """Holm-Bonferroni step-down family-wise error rate correction.
+
+    Standard algorithm (Holm 1979): sort p ascending, p_(1) <= ... <= p_(m).
+    At sorted rank i (1-indexed) the raw-adjusted value is (m - i + 1) * p_(i);
+    the adjusted p-value is the running MAXIMUM of that quantity up through
+    rank i, which is what enforces the required monotonicity (adjusted p
+    cannot decrease as the sorted rank increases), capped at 1.0. Returns
+    corrected p-values in the SAME order as the input (not sorted).
+    """
+    p = np.asarray(pvals, dtype=float)
+    m = len(p)
+    if m == 0:
+        return np.array([], dtype=float)
+    order = np.argsort(p, kind="stable")
+    sorted_p = p[order]
+    ranks = np.arange(1, m + 1)
+    candidate = (m - ranks + 1) * sorted_p
+    adjusted_sorted = np.minimum(np.maximum.accumulate(candidate), 1.0)
+    adjusted = np.empty(m, dtype=float)
+    adjusted[order] = adjusted_sorted
+    return adjusted
+
+
+def benjamini_hochberg(pvals) -> np.ndarray:
+    """Benjamini-Hochberg step-up false discovery rate correction (q-values).
+
+    Standard algorithm (Benjamini and Hochberg 1995): sort p ascending,
+    p_(1) <= ... <= p_(m). At sorted rank i the raw-adjusted value is
+    p_(i) * m / i; the adjusted q-value is the running MINIMUM of that
+    quantity from the largest rank down to rank i, which is what enforces the
+    required monotonicity from the top, capped at 1.0. Returns corrected
+    q-values in the SAME order as the input (not sorted).
+    """
+    p = np.asarray(pvals, dtype=float)
+    m = len(p)
+    if m == 0:
+        return np.array([], dtype=float)
+    order = np.argsort(p, kind="stable")
+    sorted_p = p[order]
+    ranks = np.arange(1, m + 1)
+    candidate = sorted_p * m / ranks
+    adjusted_sorted = np.minimum(np.minimum.accumulate(candidate[::-1])[::-1], 1.0)
+    adjusted = np.empty(m, dtype=float)
+    adjusted[order] = adjusted_sorted
+    return adjusted
+
+
+def bootstrap_paired_diff_ci(diff, rng: np.random.Generator, n_boot: int = N_BOOTSTRAP, conf: float = CI_CONF) -> tuple:
+    """Bootstrap 95 percent CI for the MEAN of paired differences.
+
+    Resamples the SEED-LEVEL paired differences with replacement, not the two
+    ablation arms independently: each of the n_boot resamples draws len(diff)
+    indices with replacement from the n seed-level differences and takes
+    their mean. This is the correct resampling unit for a paired design,
+    because the seed indexes a shared population sample and weather draw
+    common to both arms being differenced (docs/DECISIONS.md D8: "seeds are
+    shared across ablations at a given (k, broker_count), so ablation
+    comparisons are PAIRED by seed"); the seed-level difference is therefore
+    the exchangeable unit under resampling. Resampling the two arms
+    independently would break that deliberate pairing and would misstate the
+    true sampling variability of the paired mean difference.
+    """
+    diff = np.asarray(diff, dtype=float)
+    n = len(diff)
+    if n == 0:
+        return float("nan"), float("nan")
+    idx = rng.integers(0, n, size=(n_boot, n))
+    resample_means = diff[idx].mean(axis=1)
+    lo = float(np.percentile(resample_means, (1 - conf) / 2 * 100))
+    hi = float(np.percentile(resample_means, (1 + conf) / 2 * 100))
+    return lo, hi
+
+
+def _ci_disagreement(t_lo: float, t_hi: float, boot_lo: float, boot_hi: float,
+                      width_ratio_threshold: float = CI_DISAGREEMENT_WIDTH_RATIO) -> tuple:
+    """Flag a material disagreement between the t-based and bootstrap CIs.
+
+    Two independent triggers, either one is enough to flag: (1) the two
+    intervals disagree about whether zero lies inside them; (2) the wider
+    interval is at least `width_ratio_threshold` times the width of the
+    narrower one. Returns (flag: bool, detail: str, width_ratio: float).
+    """
+    t_excludes_zero = not (t_lo <= 0.0 <= t_hi)
+    boot_excludes_zero = not (boot_lo <= 0.0 <= boot_hi)
+    zero_flag = t_excludes_zero != boot_excludes_zero
+
+    width_t = t_hi - t_lo
+    width_boot = boot_hi - boot_lo
+    if width_t <= 0.0 and width_boot <= 0.0:
+        width_ratio = 1.0
+    elif min(width_t, width_boot) <= 0.0:
+        width_ratio = float("inf")
+    else:
+        width_ratio = max(width_t, width_boot) / min(width_t, width_boot)
+    width_flag = width_ratio >= width_ratio_threshold
+
+    flag = bool(zero_flag or width_flag)
+    details = []
+    if zero_flag:
+        details.append(
+            f"zero-exclusion disagreement (t excludes zero={t_excludes_zero}, bootstrap excludes zero={boot_excludes_zero})"
+        )
+    if width_flag:
+        details.append(f"width ratio {width_ratio:.2f}x >= {width_ratio_threshold:g}x threshold")
+    return flag, "; ".join(details), width_ratio
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +978,216 @@ def print_diagnostics(df: pd.DataFrame, effects_df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Deliverable: results/summary_stats_corrected.csv (multiple-comparison
+# correction and bootstrap CIs; additive to the existing summary/effect files)
+# ---------------------------------------------------------------------------
+
+
+def _family_row(scope: str, k: float, bc: int, ablation: str, metric: str, by_ablation: dict, correction_family: str) -> dict:
+    """One row's worth of paired-comparison statistics, computed the same way
+    as build_summary_stats()/build_effect_sizes() (same paired_comparison()
+    and paired_pct_change() helpers), plus a t-based CI on the PAIRED
+    DIFFERENCE itself (not the per-arm descriptive CI already reported in
+    results/summary_stats.csv)."""
+    label, is_metric3 = METRICS[metric]
+    disabled_frame = by_ablation[DISABLED]
+    frame = by_ablation[ablation]
+    ablation_vals = frame[metric].to_numpy(dtype=float)
+    disabled_vals = disabled_frame[metric].reindex(frame.index).to_numpy(dtype=float)
+    diff = ablation_vals - disabled_vals
+
+    paired = paired_comparison(ablation_vals, disabled_vals)
+    pct_paired, _pct_naive = paired_pct_change(ablation_vals, disabled_vals)
+    halfwidth = t_ci_halfwidth(paired["sd_diff"], len(diff))
+
+    return {
+        "scope": scope,
+        "k": k,
+        "broker_count": bc,
+        "ablation": ablation,
+        "metric": metric,
+        "metric_label": label,
+        "n_seeds": len(diff),
+        "paired_mean_diff": paired["mean_diff"],
+        "paired_mean_pct_change": pct_paired,
+        "paired_dz": paired["d_z"],
+        "p_uncorrected": paired["p_value"],
+        "degenerate": paired["degenerate"],
+        "correction_family": correction_family,
+        "ci95_t_lo": paired["mean_diff"] - halfwidth,
+        "ci95_t_hi": paired["mean_diff"] + halfwidth,
+        "metric3_sign_convention": SIGN_CONVENTION_NOTE if is_metric3 else "",
+        "_diff": diff,
+    }
+
+
+def build_corrected_summary(df: pd.DataFrame, mono_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Build the full correction-family table: one row per paired comparison,
+    with Holm-Bonferroni and Benjamini-Hochberg corrected p-values side by
+    side with the uncorrected p, plus a t-based and a bootstrap CI on the
+    paired mean difference. See the FAMILY_SIZE_* constants' docstring above
+    for the full reasoning behind which rows are in which correction family.
+
+    Three blocks of rows, distinguished by the `correction_family` column:
+      - "primary_main_sweep_real" (120 rows): capacity_pricing_only and
+        capacity_both vs capacity_disabled, all 5 metrics, all (k,
+        broker_count) cells of the main D8 sweep. This is the PRIMARY
+        correction family (FAMILY_SIZE_PRIMARY).
+      - "excluded_degenerate_main_sweep" (60 rows): capacity_pnl_only vs
+        capacity_disabled, same metrics/cells. Deterministic identities, not
+        hypothesis tests (see module-level constants docstring); p_holm and
+        p_bh are set to 1.0 by convention, not computed. Adding these back to
+        the primary 120 gives FAMILY_SIZE_ALTERNATIVE = 180.
+      - "secondary_monopoly_supplement_real" (8 rows, only if
+        results/sweep_monopoly.parquet is available): capacity_pricing_only
+        vs capacity_disabled at broker_count=1, both metric-3 sub-metrics,
+        all 4 k values. Corrected as its OWN separate family
+        (FAMILY_SIZE_MONOPOLY_SECONDARY), not pooled with the primary 120.
+
+    Bootstrap CIs are computed for every row in all three blocks (188 rows x
+    10000 resamples is cheap), not only the metric-3/cost headline subset.
+    """
+    rows: list[dict] = []
+
+    for k in K_VALUES:
+        for bc in BROKER_COUNTS:
+            by_ablation = _cell_by_ablation(df, k, bc)
+            for ablation in ENABLED_PRICING:
+                for metric in METRICS:
+                    rows.append(_family_row("main_sweep", k, bc, ablation, metric, by_ablation, "primary_main_sweep_real"))
+    n_primary = sum(1 for r in rows if r["correction_family"] == "primary_main_sweep_real")
+    assert n_primary == FAMILY_SIZE_PRIMARY, f"expected {FAMILY_SIZE_PRIMARY} primary real tests, found {n_primary}"
+
+    degenerate_start = len(rows)
+    for k in K_VALUES:
+        for bc in BROKER_COUNTS:
+            by_ablation = _cell_by_ablation(df, k, bc)
+            for metric in METRICS:
+                rows.append(
+                    _family_row("main_sweep", k, bc, "capacity_pnl_only", metric, by_ablation, "excluded_degenerate_main_sweep")
+                )
+    n_degenerate = len(rows) - degenerate_start
+    expected_degenerate = FAMILY_SIZE_ALTERNATIVE - FAMILY_SIZE_PRIMARY
+    assert n_degenerate == expected_degenerate, f"expected {expected_degenerate} degenerate rows, found {n_degenerate}"
+    for r in rows[degenerate_start:]:
+        assert r["degenerate"], "capacity_pnl_only vs capacity_disabled must be degenerate by construction (D6)"
+
+    if mono_df is not None and len(mono_df) > 0:
+        mono_start = len(rows)
+        for k in K_VALUES:
+            by_ablation = _cell_by_ablation(mono_df, k, MONOPOLY_BROKER_COUNT)
+            for metric in METRIC3_KEYS:
+                rows.append(
+                    _family_row(
+                        "monopoly_supplement", k, MONOPOLY_BROKER_COUNT, "capacity_pricing_only",
+                        metric, by_ablation, "secondary_monopoly_supplement_real",
+                    )
+                )
+        n_mono = len(rows) - mono_start
+        assert n_mono == FAMILY_SIZE_MONOPOLY_SECONDARY, f"expected {FAMILY_SIZE_MONOPOLY_SECONDARY} monopoly tests, found {n_mono}"
+    else:
+        print(
+            "\nNOTE: monopoly data not available; results/summary_stats_corrected.csv will not include "
+            f"the {FAMILY_SIZE_MONOPOLY_SECONDARY}-row monopoly_supplement secondary family."
+        )
+
+    # --- Holm and BH correction, one family at a time ---
+    family_indices: dict[str, list[int]] = {}
+    for i, r in enumerate(rows):
+        family_indices.setdefault(r["correction_family"], []).append(i)
+
+    for family, idxs in family_indices.items():
+        if family == "excluded_degenerate_main_sweep":
+            for i in idxs:
+                rows[i]["p_holm"] = 1.0
+                rows[i]["p_bh"] = 1.0
+                rows[i]["correction_family_size"] = 0  # excluded by design, not corrected
+            continue
+        pvals = [rows[i]["p_uncorrected"] for i in idxs]
+        holm_adj = holm_bonferroni(pvals)
+        bh_adj = benjamini_hochberg(pvals)
+        for j, i in enumerate(idxs):
+            rows[i]["p_holm"] = float(holm_adj[j])
+            rows[i]["p_bh"] = float(bh_adj[j])
+            rows[i]["correction_family_size"] = len(idxs)
+
+    # --- bootstrap CI + t-vs-bootstrap disagreement flag, every row ---
+    rng = np.random.default_rng(BOOTSTRAP_SEED)
+    for r in rows:
+        boot_lo, boot_hi = bootstrap_paired_diff_ci(r["_diff"], rng)
+        flag, detail, width_ratio = _ci_disagreement(r["ci95_t_lo"], r["ci95_t_hi"], boot_lo, boot_hi)
+        r["ci95_boot_lo"] = boot_lo
+        r["ci95_boot_hi"] = boot_hi
+        r["ci_width_ratio"] = width_ratio
+        r["ci_disagreement_flag"] = flag
+        r["ci_disagreement_detail"] = detail
+        r["survives_holm_alpha05"] = bool((not r["degenerate"]) and r["p_holm"] <= ALPHA)
+        r["survives_bh_alpha05"] = bool((not r["degenerate"]) and r["p_bh"] <= ALPHA)
+        r["family_size_primary"] = FAMILY_SIZE_PRIMARY
+        r["family_size_alternative"] = FAMILY_SIZE_ALTERNATIVE
+        r["family_size_monopoly_secondary"] = FAMILY_SIZE_MONOPOLY_SECONDARY
+        r["bootstrap_seed"] = BOOTSTRAP_SEED
+        r["n_bootstrap"] = N_BOOTSTRAP
+        r["alpha"] = ALPHA
+        if r["degenerate"]:
+            r["notes"] = (
+                "deterministic identity: capacity_pnl_only cannot alter this quantity by construction "
+                "(D6, the P&L channel writes nothing into any price or physical quantity); excluded "
+                "from the primary correction family; p_holm/p_bh set to 1.0 by convention, not "
+                "computed from a zero-variance test"
+            )
+        elif r["correction_family"] == "secondary_monopoly_supplement_real":
+            r["notes"] = (
+                "supplementary broker_count=1 monopoly arm (Phase 8); corrected within its own "
+                f"{FAMILY_SIZE_MONOPOLY_SECONDARY}-test secondary family, not pooled with the "
+                f"{FAMILY_SIZE_PRIMARY}-test primary main-sweep family"
+            )
+        else:
+            r["notes"] = ""
+        del r["_diff"]
+
+    columns = [
+        "scope", "k", "broker_count", "ablation", "metric", "metric_label", "n_seeds",
+        "paired_mean_diff", "paired_mean_pct_change", "paired_dz",
+        "p_uncorrected", "p_holm", "p_bh", "survives_holm_alpha05", "survives_bh_alpha05",
+        "ci95_t_lo", "ci95_t_hi", "ci95_boot_lo", "ci95_boot_hi",
+        "ci_disagreement_flag", "ci_disagreement_detail", "ci_width_ratio",
+        "degenerate", "correction_family", "correction_family_size",
+        "family_size_primary", "family_size_alternative", "family_size_monopoly_secondary",
+        "bootstrap_seed", "n_bootstrap", "alpha",
+        "metric3_sign_convention", "notes",
+    ]
+    return pd.DataFrame(rows)[columns]
+
+
+def print_correction_diagnostics(corrected_df: pd.DataFrame) -> None:
+    primary = corrected_df[corrected_df["correction_family"] == "primary_main_sweep_real"]
+    print(
+        f"\nPrimary correction family size: {FAMILY_SIZE_PRIMARY} real tests "
+        f"(alternative, including the degenerate pnl_only identities: {FAMILY_SIZE_ALTERNATIVE})"
+    )
+    print(
+        f"Primary family: {int(primary['survives_holm_alpha05'].sum())} of {len(primary)} survive Holm at "
+        f"alpha={ALPHA}; {int(primary['survives_bh_alpha05'].sum())} of {len(primary)} survive BH at alpha={ALPHA}"
+    )
+    mono = corrected_df[corrected_df["correction_family"] == "secondary_monopoly_supplement_real"]
+    if len(mono):
+        print(
+            f"Monopoly secondary family ({FAMILY_SIZE_MONOPOLY_SECONDARY} tests): "
+            f"{int(mono['survives_holm_alpha05'].sum())} survive Holm; {int(mono['survives_bh_alpha05'].sum())} survive BH"
+        )
+    n_disagree = int(corrected_df["ci_disagreement_flag"].sum())
+    print(f"t-vs-bootstrap CI disagreements flagged: {n_disagree} of {len(corrected_df)} rows")
+    if n_disagree:
+        print(
+            corrected_df.loc[
+                corrected_df["ci_disagreement_flag"],
+                ["scope", "k", "broker_count", "ablation", "metric", "ci_disagreement_detail"],
+            ].to_string(index=False)
+        )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -828,6 +1221,15 @@ def main() -> None:
 
         plot_monopoly_comparison(comparison_df)
         print(f"wrote {PLOTS_DIR / 'fig_monopoly_comparison.png'}")
+
+    mono_only_df = None
+    if combined_df is not None:
+        mono_only_df = combined_df[combined_df["broker_count"] == MONOPOLY_BROKER_COUNT].reset_index(drop=True)
+
+    corrected_df = build_corrected_summary(df, mono_only_df)
+    corrected_df.to_csv(CORRECTED_SUMMARY_PATH, index=False)
+    print(f"wrote {CORRECTED_SUMMARY_PATH} ({len(corrected_df)} rows)")
+    print_correction_diagnostics(corrected_df)
 
 
 if __name__ == "__main__":
