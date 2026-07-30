@@ -103,6 +103,13 @@ data:
   solar_lat: 40.64 # Thessaloniki
   solar_lon: 22.95
   reference_annual_demand_kwh: 4000 # informational target for the generated fallback demand shape
+  # demand_series selects which demand shape a run uses: "synthetic" (default,
+  # the generated shape above) or "opsd" (a real OPSD household-load derived
+  # shape cached at data/samples/residential_demand_opsd_hourly.csv; see
+  # config/scenarios/opsd_demand.yaml and docs/DECISIONS.md's Data provenance
+  # section). Left unset here on purpose so the default behaviour is exactly
+  # "synthetic", unchanged, whether this key is absent or explicit.
+  # demand_series: synthetic
 
 brokers:
   - id: regulated_utility

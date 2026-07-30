@@ -1,0 +1,18 @@
+# Same competitive three-broker scenario as config/default.yaml, but with the
+# demand shape switched to the real OPSD household-load derived series
+# instead of the generated synthetic sample. See
+# src/microgrid_sim/data/loaders.py (fetch_and_build_opsd_demand) and
+# docs/DECISIONS.md's "Data provenance" section for how
+# data/samples/residential_demand_opsd_hourly.csv was built.
+#
+# This does NOT change the coincidence-factor problem: every agent still
+# reads this ONE shared series (scaled by its own per-agent demand_scale),
+# so swapping the aggregate shape fixes seasonal/day-to-day realism but does
+# not introduce any inter-agent timing diversity. See
+# scripts/compare_demand_sources.py for the headline-cell comparison run.
+extends: ../default.yaml
+
+scenario_name: opsd_demand_comparison
+
+data:
+  demand_series: opsd
