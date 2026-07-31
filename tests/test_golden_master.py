@@ -1553,6 +1553,12 @@ def test_sweep_monopoly_parquet_shape_pin_bites_on_growth_shrinkage_and_row_coun
             shrunk, SWEEP_MONOPOLY_ROW_COUNT, SWEEP_MONOPOLY_COLUMNS, "results/sweep_monopoly.parquet"
         )
 
+    appended = pd.concat([df, df.iloc[[-1]]], ignore_index=True)
+    with pytest.raises(AssertionError):
+        _assert_parquet_shape(
+            appended, SWEEP_MONOPOLY_ROW_COUNT, SWEEP_MONOPOLY_COLUMNS, "results/sweep_monopoly.parquet"
+        )
+
     dropped = df.drop(index=df.index[-1])
     with pytest.raises(AssertionError):
         _assert_parquet_shape(
@@ -1592,6 +1598,12 @@ def test_sweep_opsd_headline_parquet_shape_pin_bites_on_growth_shrinkage_and_row
             shrunk, SWEEP_OPSD_HEADLINE_ROW_COUNT, SWEEP_OPSD_HEADLINE_COLUMNS, "results/sweep_opsd_headline.parquet"
         )
 
+    appended = pd.concat([df, df.iloc[[-1]]], ignore_index=True)
+    with pytest.raises(AssertionError):
+        _assert_parquet_shape(
+            appended, SWEEP_OPSD_HEADLINE_ROW_COUNT, SWEEP_OPSD_HEADLINE_COLUMNS, "results/sweep_opsd_headline.parquet"
+        )
+
     dropped = df.drop(index=df.index[-1])
     with pytest.raises(AssertionError):
         _assert_parquet_shape(
@@ -1627,6 +1639,12 @@ def test_sweep_structural_parquet_shape_pin_bites_on_growth_shrinkage_and_row_co
     with pytest.raises(AssertionError):
         _assert_parquet_shape(
             shrunk, SWEEP_STRUCTURAL_ROW_COUNT, SWEEP_STRUCTURAL_COLUMNS, "results/sweep_structural.parquet"
+        )
+
+    appended = pd.concat([df, df.iloc[[-1]]], ignore_index=True)
+    with pytest.raises(AssertionError):
+        _assert_parquet_shape(
+            appended, SWEEP_STRUCTURAL_ROW_COUNT, SWEEP_STRUCTURAL_COLUMNS, "results/sweep_structural.parquet"
         )
 
     dropped = df.drop(index=df.index[-1])
