@@ -33,8 +33,22 @@ One row per run records the config keys, the four thesis metrics, and
 audit columns (see ROW_COLUMNS below); results/sweep_raw.parquet is written at
 the end (CSV fallback if the parquet writer fails), with an incremental CSV
 checkpoint every ~5% of the grid for crash-resume. Re-running this script
-skips any (k, broker_count, ablation, seed) tuple already present in an
-existing parquet/CSV/checkpoint file under --results-dir.
+skips any (k, broker_count, ablation, seed, capacity_surcharge_mode) tuple
+already present in an existing parquet/CSV/checkpoint file under
+--results-dir (or --output; see below).
+
+D10 control arm: capacity_surcharge_mode (docs/DECISIONS.md D10) is a grid
+axis alongside k, broker_count, ablation and seed. It defaults to
+("proportional",) only, so a plain invocation with none of --k-values,
+--broker-counts, --ablations or --modes reproduces today's 1440-run grid
+exactly, byte-identically, with the new capacity_surcharge_mode column
+recording "proportional" on every row (including rows already present in an
+existing results file from before this column existed, which are backfilled
+with "proportional" on load rather than re-run). --k-values, --broker-counts,
+--ablations and --modes each take a comma-separated list to restrict the grid
+to a subset of the axis (e.g. --modes synchronized,renormalized); --output
+gives an explicit parquet path, overriding --results-dir's default
+sweep_raw.parquet/.csv/_checkpoint.csv naming with the same stem-based scheme.
 
 CLI modes:
     --mode dry-run   build all 12 (broker_count, ablation) configs at one
@@ -46,14 +60,17 @@ CLI modes:
                      the grid. Rows produced are real, valid grid rows and
                      are persisted (so they count toward the real sweep and
                      are not wasted), scoped to --results-dir.
-    --mode full      the actual 1440-run sweep: smoke-estimate first (reusing
-                     its 8 runs), then the resumable multiprocessing sweep
-                     over whatever remains.
+    --mode full      the actual sweep: smoke-estimate first (reusing its
+                     runs), then the resumable multiprocessing sweep over
+                     whatever remains.
 
 Run from the repository root (data/ and config/ paths are relative), e.g.:
     python scripts/run_sensitivity_sweep.py --mode dry-run
     python scripts/run_sensitivity_sweep.py --mode smoke
     python scripts/run_sensitivity_sweep.py --mode full
+    python scripts/run_sensitivity_sweep.py --mode full --k-values 0.5,1.0 \
+        --broker-counts 2,3,5 --ablations capacity_disabled,capacity_both \
+        --modes synchronized,renormalized --output results/sweep_surcharge_mode.parquet
 """
 
 from __future__ import annotations
@@ -77,6 +94,7 @@ import pandas as pd
 import psutil
 
 from microgrid_sim.config.loader import load_config
+from microgrid_sim.environment.capacity import SURCHARGE_MODES
 from microgrid_sim.environment.model import MicrogridModel
 
 # Mesa 3.5.1 still supports seed= (the model-driver API this script uses) but
@@ -102,6 +120,11 @@ ABLATION_FLAGS = {
 }
 ABLATIONS = tuple(ABLATION_FLAGS.keys())
 
+# D10 (docs/DECISIONS.md): capacity_surcharge_mode as a grid axis. Defaults to
+# "proportional" only, the original, unchanged behaviour, so a plain
+# invocation's grid is exactly the pre-D10 1440 rows (see _build_grid below).
+DEFAULT_MODES = ("proportional",)
+
 # Fixed, deterministic, documented seed list (brief: "for example 0..29, or a
 # fixed base plus 0..29"): the project's canonical fixed seed (see
 # config/default.yaml, simulation.seed) plus a 0..29 offset, so the sweep's
@@ -113,13 +136,23 @@ SEEDS = tuple(SEED_BASE + offset for offset in range(30))
 WINDOW_HOURS = 168  # D8: window fixed across the whole sweep
 HORIZON_HOURS = 8760  # D8: one year, the mandated sweep horizon
 
-FULL_GRID = tuple(
-    (k, bc, ablation, seed)
-    for k in K_VALUES
-    for bc in BROKER_COUNTS
-    for ablation in ABLATIONS
-    for seed in SEEDS
-)
+
+def _build_grid(k_values, broker_counts, ablations, seeds, modes) -> tuple:
+    """Build the (k, broker_count, ablation, seed, capacity_surcharge_mode)
+    task grid from the given axis values. mode is the outermost loop, so a
+    single-element modes (the default) leaves the (k, broker_count, ablation,
+    seed) enumeration order exactly as it always was."""
+    return tuple(
+        (k, bc, ablation, seed, mode)
+        for mode in modes
+        for k in k_values
+        for bc in broker_counts
+        for ablation in ablations
+        for seed in seeds
+    )
+
+
+FULL_GRID = _build_grid(K_VALUES, BROKER_COUNTS, ABLATIONS, SEEDS, DEFAULT_MODES)
 TOTAL_RUNS = len(FULL_GRID)
 assert TOTAL_RUNS == 1440, f"expected 1440 grid runs, got {TOTAL_RUNS}"
 
@@ -212,17 +245,26 @@ def _build_broker_list(base_brokers: list[dict], broker_count: int, seed: int) -
 
 
 def build_run_config(
-    base_config: dict, k: float, broker_count: int, ablation: str, seed: int, horizon_hours: int = HORIZON_HOURS
+    base_config: dict,
+    k: float,
+    broker_count: int,
+    ablation: str,
+    seed: int,
+    horizon_hours: int = HORIZON_HOURS,
+    surcharge_mode: str = "proportional",
 ) -> dict:
     """Build one run's config: deepcopy the base config, then override only
     simulation.seed, simulation.horizon_hours, capacity_mechanism.{enabled,
-    feedback_pnl, feedback_pricing, k, window}, and brokers. Nothing else is
-    touched, so num_agents and every structural coefficient stay at the
-    config/default.yaml value (D8: "no parameter other than k, broker_count,
-    and the ablation flags varies across the sweep").
+    feedback_pnl, feedback_pricing, k, window, capacity_surcharge_mode}, and
+    brokers. Nothing else is touched, so num_agents and every structural
+    coefficient stay at the config/default.yaml value (D8: "no parameter
+    other than k, broker_count, and the ablation flags varies across the
+    sweep"; D10 adds capacity_surcharge_mode as the one further axis).
     """
     if ablation not in ABLATION_FLAGS:
         raise ValueError(f"unknown ablation: {ablation}")
+    if surcharge_mode not in SURCHARGE_MODES:
+        raise ValueError(f"unknown capacity_surcharge_mode: {surcharge_mode}")
 
     config = copy.deepcopy(base_config)
     config["simulation"]["seed"] = seed
@@ -235,6 +277,7 @@ def build_run_config(
     capacity_cfg["feedback_pricing"] = flags["feedback_pricing"]
     capacity_cfg["k"] = k
     capacity_cfg["window"] = WINDOW_HOURS
+    capacity_cfg["capacity_surcharge_mode"] = surcharge_mode
 
     config["brokers"] = _build_broker_list(base_config["brokers"], broker_count, seed)
     return config
@@ -249,6 +292,7 @@ ROW_COLUMNS = [
     "broker_count",
     "ablation",
     "seed",
+    "capacity_surcharge_mode",
     "avg_cost_per_agent_eur",
     "avg_cost_per_kwh_eur",
     "load_concentration_hhi",
@@ -284,7 +328,7 @@ def _gini(values: list) -> float:
     return (2.0 * cumulative) / (n * total) - (n + 1) / n
 
 
-def _build_row(k: float, broker_count: int, ablation: str, seed: int, model, metrics) -> dict:
+def _build_row(k: float, broker_count: int, ablation: str, seed: int, mode: str, model, metrics) -> dict:
     broker_load_share = dict(metrics.broker_load_share)
     mean_surcharge = dict(metrics.mean_broker_surcharge_eur_per_kwh)
 
@@ -300,6 +344,7 @@ def _build_row(k: float, broker_count: int, ablation: str, seed: int, model, met
         "broker_count": broker_count,
         "ablation": ablation,
         "seed": seed,
+        "capacity_surcharge_mode": mode,
         "avg_cost_per_agent_eur": metrics.avg_cost_per_agent_eur,
         "avg_cost_per_kwh_eur": metrics.avg_cost_per_kwh_eur,
         "load_concentration_hhi": metrics.load_concentration_hhi,
@@ -319,7 +364,19 @@ def _build_row(k: float, broker_count: int, ablation: str, seed: int, model, met
 
 
 def _row_key(record: dict) -> tuple:
-    return (float(record["k"]), int(record["broker_count"]), str(record["ablation"]), int(record["seed"]))
+    # D10: mode defaults to "proportional" when absent (or blank/NaN, from a
+    # CSV round-trip of a row written before this column existed), so a
+    # pre-D10 row keys and dedupes exactly as it always did.
+    mode = record.get("capacity_surcharge_mode", "proportional")
+    if mode is None or mode != mode:  # mode != mode is the NaN check
+        mode = "proportional"
+    return (
+        float(record["k"]),
+        int(record["broker_count"]),
+        str(record["ablation"]),
+        int(record["seed"]),
+        str(mode),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -351,17 +408,20 @@ def _peak_rss_mb() -> float:
 
 
 def _run_one_task(task: tuple) -> dict:
-    """Run exactly one (k, broker_count, ablation, seed) to completion and
-    return its row dict. Releases the model before returning (no accumulation
-    of model objects across runs within a persistent worker process)."""
-    k, broker_count, ablation, seed = task
-    config = build_run_config(_WORKER_BASE_CONFIG, k, broker_count, ablation, seed, _WORKER_HORIZON_HOURS)
+    """Run exactly one (k, broker_count, ablation, seed, capacity_surcharge_mode)
+    to completion and return its row dict. Releases the model before
+    returning (no accumulation of model objects across runs within a
+    persistent worker process)."""
+    k, broker_count, ablation, seed, mode = task
+    config = build_run_config(
+        _WORKER_BASE_CONFIG, k, broker_count, ablation, seed, _WORKER_HORIZON_HOURS, surcharge_mode=mode
+    )
 
     start = time.perf_counter()
     model = MicrogridModel(config)
     model.run()
     metrics = model.compute_metrics()
-    row = _build_row(k, broker_count, ablation, seed, model, metrics)
+    row = _build_row(k, broker_count, ablation, seed, mode, model, metrics)
     row["run_wallclock_sec"] = time.perf_counter() - start
     row["peak_rss_mb"] = _peak_rss_mb()
 
@@ -391,7 +451,23 @@ def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
     os.replace(tmp_path, path)
 
 
-def _result_paths(results_dir: Path) -> dict:
+def _result_paths(results_dir: Path, output_path: Path | None = None) -> dict:
+    """The three result file paths (parquet, CSV fallback, checkpoint).
+
+    Default naming (output_path is None) is unchanged: sweep_raw.{parquet,csv}
+    and sweep_raw_checkpoint.csv under --results-dir. --output overrides this
+    with an explicit parquet path; the CSV fallback and checkpoint files then
+    sit alongside it, sharing its stem, the same convention this project's
+    other sweep scripts already use for their own checkpoint files.
+    """
+    if output_path is not None:
+        parent = output_path.parent
+        stem = output_path.stem
+        return {
+            "parquet": output_path,
+            "csv_fallback": parent / f"{stem}.csv",
+            "checkpoint": parent / f"{stem}_checkpoint.csv",
+        }
     return {
         "parquet": results_dir / "sweep_raw.parquet",
         "csv_fallback": results_dir / "sweep_raw.csv",
@@ -403,6 +479,11 @@ def _load_existing_rows(paths: dict) -> list:
     """Read whatever result files already exist (checkpoint, CSV fallback,
     parquet, in that order so a completed parquet -- if present -- has the
     final say for any duplicate key) and return the deduplicated row records.
+
+    D10: a record from before capacity_surcharge_mode existed is backfilled
+    with "proportional" here, once, rather than re-run, so resuming an
+    already-complete pre-D10 results file reproduces it byte-for-byte with
+    the new column filled in instead of recomputing anything.
     """
     rows_by_key: dict = {}
     for key_name in ("checkpoint", "csv_fallback", "parquet"):
@@ -415,6 +496,7 @@ def _load_existing_rows(paths: dict) -> list:
             print(f"WARNING: failed to read existing results file {path}: {exc}", file=sys.stderr)
             continue
         for record in frame.to_dict(orient="records"):
+            record.setdefault("capacity_surcharge_mode", "proportional")
             try:
                 rows_by_key[_row_key(record)] = record
             except (KeyError, TypeError, ValueError) as exc:
@@ -422,11 +504,13 @@ def _load_existing_rows(paths: dict) -> list:
     return list(rows_by_key.values())
 
 
-def _write_final_results(rows: list, results_dir: Path) -> Path:
-    paths = _result_paths(results_dir)
+def _write_final_results(rows: list, results_dir: Path, output_path: Path | None = None) -> Path:
+    paths = _result_paths(results_dir, output_path)
     frame = pd.DataFrame(rows)
     frame = frame.reindex(columns=ROW_COLUMNS)
-    frame = frame.sort_values(["k", "broker_count", "ablation", "seed"]).reset_index(drop=True)
+    frame = frame.sort_values(["k", "broker_count", "ablation", "seed", "capacity_surcharge_mode"]).reset_index(
+        drop=True
+    )
     try:
         _atomic_write_parquet(frame, paths["parquet"])
         return paths["parquet"]
@@ -455,17 +539,18 @@ _SMOKE_COMBOS = (
 )
 
 
-def _pick_smoke_tasks(remaining_tasks: list, smoke_size: int) -> list:
+def _pick_smoke_tasks(remaining_tasks: list, smoke_size: int, k_values=K_VALUES, modes=DEFAULT_MODES, seed=None) -> list:
     if not remaining_tasks or smoke_size <= 0:
         return []
+    seed = SEEDS[0] if seed is None else seed
     remaining_set = set(remaining_tasks)
     picked: list = []
     for index, (broker_count, ablation) in enumerate(_SMOKE_COMBOS):
         if len(picked) >= smoke_size:
             break
-        k = K_VALUES[index % len(K_VALUES)]
-        seed = SEEDS[0]
-        task = (k, broker_count, ablation, seed)
+        k = k_values[index % len(k_values)]
+        mode = modes[index % len(modes)]
+        task = (k, broker_count, ablation, seed, mode)
         if task in remaining_set and task not in picked:
             picked.append(task)
     # Pad deterministically from the remaining grid if some preferred combos
@@ -487,15 +572,24 @@ def _run_batch(tasks: list, base_config: dict, workers: int, horizon_hours: int)
 
 
 def _estimate_via_smoke(
-    base_config: dict, workers: int, horizon_hours: int, smoke_size: int, existing_rows: list, remaining_tasks: list
+    base_config: dict,
+    workers: int,
+    horizon_hours: int,
+    smoke_size: int,
+    existing_rows: list,
+    remaining_tasks: list,
+    total_runs: int = TOTAL_RUNS,
+    k_values=K_VALUES,
+    modes=DEFAULT_MODES,
 ) -> dict:
     """Run a real smoke batch (subset of remaining_tasks), measure per-run
-    wallclock/RSS, extrapolate the full 1440-run wallclock at `workers`
-    workers, and apply the RAM-budget worker-count adjustment. Returns a dict
-    describing what happened plus the updated row/task lists so the caller
-    can either stop here (--mode smoke) or continue into the full loop.
+    wallclock/RSS, extrapolate the full `total_runs`-run wallclock at
+    `workers` workers, and apply the RAM-budget worker-count adjustment.
+    Returns a dict describing what happened plus the updated row/task lists
+    so the caller can either stop here (--mode smoke) or continue into the
+    full loop.
     """
-    smoke_tasks = _pick_smoke_tasks(remaining_tasks, smoke_size)
+    smoke_tasks = _pick_smoke_tasks(remaining_tasks, smoke_size, k_values=k_values, modes=modes)
     if not smoke_tasks:
         print("[sweep] no remaining tasks available for the smoke batch (grid already complete).")
         return {
@@ -534,9 +628,9 @@ def _estimate_via_smoke(
         )
         effective_workers = adjusted
 
-    estimated_full_hours = (TOTAL_RUNS * avg_wallclock_sec) / effective_workers / 3600.0
+    estimated_full_hours = (total_runs * avg_wallclock_sec) / effective_workers / 3600.0
     print(
-        f"[sweep] estimated full {TOTAL_RUNS}-run sweep wallclock at {effective_workers} workers: "
+        f"[sweep] estimated full {total_runs}-run sweep wallclock at {effective_workers} workers: "
         f"{estimated_full_hours:.2f} hours"
     )
     if estimated_full_hours > WALLCLOCK_WARN_HOURS:
@@ -567,10 +661,17 @@ def _estimate_via_smoke(
 
 
 def _run_main_loop(
-    remaining_tasks: list, base_config: dict, workers: int, horizon_hours: int, all_rows: list, results_dir: Path
+    remaining_tasks: list,
+    base_config: dict,
+    workers: int,
+    horizon_hours: int,
+    all_rows: list,
+    results_dir: Path,
+    total_runs: int = TOTAL_RUNS,
+    output_path: Path | None = None,
 ) -> list:
-    paths = _result_paths(results_dir)
-    step = max(1, round(TOTAL_RUNS * CHECKPOINT_FRACTION))
+    paths = _result_paths(results_dir, output_path)
+    step = max(1, round(total_runs * CHECKPOINT_FRACTION))
     done_count = len(all_rows)
     last_bucket = done_count // step
 
@@ -589,14 +690,14 @@ def _run_main_loop(
                     done_count += 1
                     processed_this_attempt += 1
                     bucket = done_count // step
-                    if bucket > last_bucket or done_count == TOTAL_RUNS:
+                    if bucket > last_bucket or done_count == total_runs:
                         elapsed = time.perf_counter() - loop_start
                         rate = processed_this_attempt / elapsed if elapsed > 0 else 0.0
-                        remaining_n = TOTAL_RUNS - done_count
+                        remaining_n = total_runs - done_count
                         eta_min = (remaining_n / rate / 60.0) if rate > 0 else float("nan")
-                        pct = 100.0 * done_count / TOTAL_RUNS
+                        pct = 100.0 * done_count / total_runs
                         print(
-                            f"[sweep] progress {done_count}/{TOTAL_RUNS} ({pct:.1f}%) "
+                            f"[sweep] progress {done_count}/{total_runs} ({pct:.1f}%) "
                             f"elapsed={elapsed / 60.0:.1f}min ETA={eta_min:.1f}min workers={current_workers}"
                         )
                         _atomic_write_csv(pd.DataFrame(all_rows).reindex(columns=ROW_COLUMNS), paths["checkpoint"])
@@ -658,16 +759,29 @@ def cmd_dry_run(base_config: dict) -> bool:
     return all_ok
 
 
-def cmd_smoke(base_config: dict, workers: int, horizon_hours: int, smoke_size: int, results_dir: Path) -> dict:
-    paths = _result_paths(results_dir)
+def cmd_smoke(
+    base_config: dict,
+    workers: int,
+    horizon_hours: int,
+    smoke_size: int,
+    results_dir: Path,
+    grid: tuple = FULL_GRID,
+    total_runs: int = TOTAL_RUNS,
+    k_values=K_VALUES,
+    modes=DEFAULT_MODES,
+    output_path: Path | None = None,
+) -> dict:
+    paths = _result_paths(results_dir, output_path)
     results_dir.mkdir(parents=True, exist_ok=True)
     existing_rows = _load_existing_rows(paths)
     completed_keys = {_row_key(row) for row in existing_rows}
-    remaining_tasks = [task for task in FULL_GRID if task not in completed_keys]
+    remaining_tasks = [task for task in grid if task not in completed_keys]
 
-    print(f"[sweep] mode=smoke  total_grid={TOTAL_RUNS}  already_completed={len(existing_rows)}  remaining={len(remaining_tasks)}")
+    print(f"[sweep] mode=smoke  total_grid={total_runs}  already_completed={len(existing_rows)}  remaining={len(remaining_tasks)}")
 
-    estimate = _estimate_via_smoke(base_config, workers, horizon_hours, smoke_size, existing_rows, remaining_tasks)
+    estimate = _estimate_via_smoke(
+        base_config, workers, horizon_hours, smoke_size, existing_rows, remaining_tasks, total_runs, k_values, modes
+    )
     if estimate["smoke_rows"]:
         _atomic_write_csv(pd.DataFrame(estimate["all_rows"]).reindex(columns=ROW_COLUMNS), paths["checkpoint"])
         print(f"[sweep] {len(estimate['smoke_rows'])} smoke rows checkpointed to {paths['checkpoint']}")
@@ -675,7 +789,18 @@ def cmd_smoke(base_config: dict, workers: int, horizon_hours: int, smoke_size: i
     return estimate
 
 
-def cmd_full(base_config: dict, workers: int, horizon_hours: int, smoke_size: int, results_dir: Path) -> list:
+def cmd_full(
+    base_config: dict,
+    workers: int,
+    horizon_hours: int,
+    smoke_size: int,
+    results_dir: Path,
+    grid: tuple = FULL_GRID,
+    total_runs: int = TOTAL_RUNS,
+    k_values=K_VALUES,
+    modes=DEFAULT_MODES,
+    output_path: Path | None = None,
+) -> list:
     if horizon_hours != HORIZON_HOURS:
         print(
             f"WARNING: --mode full with horizon_hours={horizon_hours} (not the mandated {HORIZON_HOURS}); "
@@ -683,36 +808,59 @@ def cmd_full(base_config: dict, workers: int, horizon_hours: int, smoke_size: in
             file=sys.stderr,
         )
 
-    paths = _result_paths(results_dir)
+    paths = _result_paths(results_dir, output_path)
     results_dir.mkdir(parents=True, exist_ok=True)
     existing_rows = _load_existing_rows(paths)
     completed_keys = {_row_key(row) for row in existing_rows}
-    remaining_tasks = [task for task in FULL_GRID if task not in completed_keys]
+    remaining_tasks = [task for task in grid if task not in completed_keys]
 
-    print(f"[sweep] mode=full  total_grid={TOTAL_RUNS}  already_completed={len(existing_rows)}  remaining={len(remaining_tasks)}")
+    print(f"[sweep] mode=full  total_grid={total_runs}  already_completed={len(existing_rows)}  remaining={len(remaining_tasks)}")
 
     if not remaining_tasks:
         print("[sweep] nothing to do; all runs already completed.")
-        final_path = _write_final_results(existing_rows, results_dir)
+        final_path = _write_final_results(existing_rows, results_dir, output_path)
         print(f"[sweep] wrote {final_path}")
         return existing_rows
 
-    estimate = _estimate_via_smoke(base_config, workers, horizon_hours, smoke_size, existing_rows, remaining_tasks)
+    estimate = _estimate_via_smoke(
+        base_config, workers, horizon_hours, smoke_size, existing_rows, remaining_tasks, total_runs, k_values, modes
+    )
     effective_workers = estimate["effective_workers"]
     all_rows = estimate["all_rows"]
     remaining_after_smoke = estimate["remaining_after_smoke"]
 
     if remaining_after_smoke:
-        all_rows = _run_main_loop(remaining_after_smoke, base_config, effective_workers, horizon_hours, all_rows, results_dir)
+        all_rows = _run_main_loop(
+            remaining_after_smoke,
+            base_config,
+            effective_workers,
+            horizon_hours,
+            all_rows,
+            results_dir,
+            total_runs,
+            output_path,
+        )
 
-    final_path = _write_final_results(all_rows, results_dir)
-    print(f"[sweep] DONE: {len(all_rows)}/{TOTAL_RUNS} runs recorded -> {final_path}")
+    final_path = _write_final_results(all_rows, results_dir, output_path)
+    print(f"[sweep] DONE: {len(all_rows)}/{total_runs} runs recorded -> {final_path}")
     return all_rows
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+
+def _parse_float_list(text: str) -> tuple:
+    return tuple(float(part.strip()) for part in text.split(",") if part.strip())
+
+
+def _parse_int_list(text: str) -> tuple:
+    return tuple(int(part.strip()) for part in text.split(",") if part.strip())
+
+
+def _parse_str_list(text: str) -> tuple:
+    return tuple(part.strip() for part in text.split(",") if part.strip())
 
 
 def _parse_args(argv=None) -> argparse.Namespace:
@@ -728,6 +876,27 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="TESTING ONLY override; the real sweep always uses the mandated 8760h horizon (D8).",
     )
     parser.add_argument("--results-dir", default="results")
+    parser.add_argument(
+        "--k-values", default=None, help="comma-separated capacity_k values to sweep (default: the full D8 grid)"
+    )
+    parser.add_argument(
+        "--broker-counts", default=None, help="comma-separated broker_count values to sweep (default: 2,3,5)"
+    )
+    parser.add_argument(
+        "--ablations", default=None, help="comma-separated ablation names to sweep (default: all four)"
+    )
+    parser.add_argument(
+        "--modes",
+        default=None,
+        help="comma-separated capacity_surcharge_mode values to sweep (D10; default: proportional only, "
+        "today's behaviour)",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="explicit output parquet path, overriding --results-dir's default sweep_raw naming "
+        "(the CSV fallback and checkpoint files share its stem)",
+    )
     return parser.parse_args(argv)
 
 
@@ -740,11 +909,49 @@ def main(argv=None) -> int:
         ok = cmd_dry_run(base_config)
         return 0 if ok else 1
 
+    k_values = _parse_float_list(args.k_values) if args.k_values else K_VALUES
+    broker_counts = _parse_int_list(args.broker_counts) if args.broker_counts else BROKER_COUNTS
+    ablations = _parse_str_list(args.ablations) if args.ablations else ABLATIONS
+    modes = _parse_str_list(args.modes) if args.modes else DEFAULT_MODES
+    output_path = Path(args.output) if args.output else None
+
+    for ablation in ablations:
+        if ablation not in ABLATION_FLAGS:
+            raise SystemExit(f"unknown ablation: {ablation!r} (must be one of {ABLATIONS})")
+    for mode in modes:
+        if mode not in SURCHARGE_MODES:
+            raise SystemExit(f"unknown capacity_surcharge_mode: {mode!r} (must be one of {SURCHARGE_MODES})")
+
+    grid = _build_grid(k_values, broker_counts, ablations, SEEDS, modes)
+    total_runs = len(grid)
+
     if args.mode == "smoke":
-        cmd_smoke(base_config, args.workers, args.horizon_hours, args.smoke_size, results_dir)
+        cmd_smoke(
+            base_config,
+            args.workers,
+            args.horizon_hours,
+            args.smoke_size,
+            results_dir,
+            grid,
+            total_runs,
+            k_values,
+            modes,
+            output_path,
+        )
         return 0
 
-    cmd_full(base_config, args.workers, args.horizon_hours, args.smoke_size, results_dir)
+    cmd_full(
+        base_config,
+        args.workers,
+        args.horizon_hours,
+        args.smoke_size,
+        results_dir,
+        grid,
+        total_runs,
+        k_values,
+        modes,
+        output_path,
+    )
     return 0
 
 

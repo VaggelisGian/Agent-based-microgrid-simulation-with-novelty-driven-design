@@ -67,7 +67,9 @@ HEADLINE_BROKER_COUNT = 3
 CHECKPOINT_FRACTION = 0.2
 
 OPSD_GRID = tuple(
-    (HEADLINE_K, HEADLINE_BROKER_COUNT, ablation, seed) for ablation in sweep.ABLATIONS for seed in sweep.SEEDS
+    (HEADLINE_K, HEADLINE_BROKER_COUNT, ablation, seed, "proportional")
+    for ablation in sweep.ABLATIONS
+    for seed in sweep.SEEDS
 )
 TOTAL_RUNS = len(OPSD_GRID)
 assert TOTAL_RUNS == 120, f"expected 120 opsd headline-cell runs, got {TOTAL_RUNS}"
@@ -108,6 +110,10 @@ def _load_existing_rows(paths: dict) -> list:
             print(f"WARNING: failed to read existing results file {path}: {exc}", file=sys.stderr)
             continue
         for record in frame.to_dict(orient="records"):
+            # D10: backfill a pre-existing row from before capacity_surcharge_mode
+            # existed, so it keys and reproduces exactly as it always did rather
+            # than being re-run (same rationale as sweep._load_existing_rows).
+            record.setdefault("capacity_surcharge_mode", "proportional")
             try:
                 rows_by_key[sweep._row_key(record)] = record
             except (KeyError, TypeError, ValueError) as exc:
@@ -139,14 +145,14 @@ def _init_worker(base_config: dict, horizon_hours: int) -> None:
 
 
 def _run_one_task(task: tuple) -> dict:
-    k, broker_count, ablation, seed = task
+    k, broker_count, ablation, seed, mode = task
     config = _build_opsd_run_config(_WORKER_BASE_CONFIG, ablation, seed, _WORKER_HORIZON_HOURS)
 
     start = time.perf_counter()
     model = sweep.MicrogridModel(config)
     model.run()
     metrics = model.compute_metrics()
-    row = sweep._build_row(k, broker_count, ablation, seed, model, metrics)
+    row = sweep._build_row(k, broker_count, ablation, seed, mode, model, metrics)
     row["run_wallclock_sec"] = time.perf_counter() - start
     row["peak_rss_mb"] = sweep._peak_rss_mb()
 
