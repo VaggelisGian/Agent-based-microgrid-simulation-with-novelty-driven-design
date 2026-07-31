@@ -19,20 +19,28 @@ WHAT THIS WRITES:
 WHAT THIS DOES NOT DO:
   It re-runs no simulation. It reads no parquet. It recomputes no t-test. It takes the
   already-computed uncorrected p-values as given and only re-applies Holm-Bonferroni and
-  Benjamini-Hochberg FDR corrections at alpha=0.05 under six different definitions of the
+  Benjamini-Hochberg FDR corrections at alpha=0.05 under seven different definitions of the
   correction family, so that the robustness of the headline conclusion to the family choice
   is recorded in a shipped artifact rather than asserted.
 
-The six family definitions:
+The seven family definitions:
   F1 main_sweep_primary_120          the shipped primary family: the main sweep's real
                                      (non-degenerate) tests. Included as the reference.
   F2 main_sweep_with_degenerates_180 F1 plus the 60 capacity_pnl_only contrasts that are
                                      deterministic identities (p=1.0 by convention).
   F3 per_metric_24                   each metric corrected inside its own family.
   F4 pooled_with_monopoly            F1 pooled with the supplementary broker_count=1 arm.
-  F5 everything_pooled               every real paired test this thesis computed, in one family
-                                     (main sweep + monopoly arm + D9 structural sweep).
+  F5 everything_pooled               the D8 main sweep's real tests, the monopoly arm and the
+                                     D9 structural sweep, in one family.
   F6 per_cell_k_by_broker_count      family = the tests sharing a single (k, broker_count) cell.
+  F7 everything_pooled_with_degenerates
+                                     the union of F2 and F5: F5 plus the 60 deterministic
+                                     identities. The widest family this script computes.
+
+F5 and F7 do NOT include the Phase 12 OPSD paired tests of Section 6.12, which are real paired
+tests but carry no p-value column in results/demand_source_comparison.csv, so there is nothing
+here to pool. "Everything" therefore means the D8 main sweep, the broker_count=1 monopoly arm
+and the D9 structural sweep, not literally every paired test in the thesis.
 
 Determinism: the script sorts every table explicitly, uses stable sorts, and writes with LF
 line endings, so two consecutive runs produce a byte-identical results/family_sensitivity.csv.
@@ -76,6 +84,7 @@ OUTPUT_COLUMNS = [
     "k",
     "broker_count",
     "ablation",
+    "cell_is_stamped_not_native",
     "metric",
     "test_id",
     "is_headline_72",
@@ -169,8 +178,12 @@ def load_test_pool() -> pd.DataFrame:
     Columns: source, scope, k, broker_count, ablation, metric, test_id, p_uncorrected,
     degenerate, is_headline_72.
     """
-    summary = pd.read_csv(SUMMARY_CORRECTED_CSV)
-    structural = pd.read_csv(STRUCTURAL_CSV)
+    # float_precision="round_trip" everywhere: pandas' default float parser is not
+    # round-trip exact, and without this the p-values echoed into the artifact differ from
+    # the source decimals by up to ~1e-13 relative, which would be an artifact of parsing
+    # rather than of the correction being studied.
+    summary = pd.read_csv(SUMMARY_CORRECTED_CSV, float_precision="round_trip")
+    structural = pd.read_csv(STRUCTURAL_CSV, float_precision="round_trip")
 
     rows = []
 
@@ -185,6 +198,7 @@ def load_test_pool() -> pd.DataFrame:
                 "k": float(r["k"]),
                 "broker_count": int(r["broker_count"]),
                 "ablation": str(r["ablation"]),
+                "cell_is_stamped_not_native": False,
                 "metric": str(r["metric"]),
                 "test_id": "main|k={:g}|bc={:d}|{}|{}".format(
                     float(r["k"]), int(r["broker_count"]), r["ablation"], r["metric"]
@@ -205,6 +219,7 @@ def load_test_pool() -> pd.DataFrame:
                 "k": float(r["k"]),
                 "broker_count": int(r["broker_count"]),
                 "ablation": str(r["ablation"]),
+                "cell_is_stamped_not_native": False,
                 "metric": str(r["metric"]),
                 "test_id": "monopoly|k={:g}|bc={:d}|{}|{}".format(
                     float(r["k"]), int(r["broker_count"]), r["ablation"], r["metric"]
@@ -235,10 +250,17 @@ def load_test_pool() -> pd.DataFrame:
                 "source": "structural_" + str(r["scope"]),
                 "scope": "structural_sweep",
                 # The D9 sweep is run at the headline cell: k=1.0, broker_count=3,
-                # capacity_both vs capacity_disabled.
+                # capacity_both vs capacity_disabled. The k / broker_count / ablation values
+                # below are therefore a STAMP describing where D9 was run, not a native
+                # coordinate of the row, and cell_is_stamped_not_native records that so a
+                # reader who groups the artifact by (k, broker_count, ablation) does not read
+                # these 118 rows as extra tests sitting at the headline cell. Family
+                # assignment never uses the stamp: no definition keyed on (k, broker_count)
+                # includes the D9 rows.
                 "k": 1.0,
                 "broker_count": 3,
                 "ablation": "capacity_both",
+                "cell_is_stamped_not_native": True,
                 "metric": str(r["metric"]),
                 "test_id": ident,
                 "p_uncorrected": float(r["p_uncorrected"]),
@@ -301,6 +323,13 @@ def family_assignments(pool: pd.DataFrame) -> dict[str, pd.DataFrame]:
     )
     definitions["F6_per_cell_k_by_broker_count"] = f6
 
+    # F7 crosses the two axes the other definitions vary separately: "fold the deterministic
+    # identities back in" (F2) and "pool the monopoly arm and D9 in" (F5). It is the union of
+    # the two and the widest family here.
+    f7 = pool[is_main_real | is_main_degen | is_mono | is_struct].copy()
+    f7["family_key"] = "everything_pooled_with_degenerates"
+    definitions["F7_everything_pooled_with_degenerates"] = f7
+
     return definitions
 
 
@@ -320,13 +349,23 @@ FAMILY_NOTES = {
         "F1 pooled with the 8 real tests of the supplementary broker_count=1 monopoly arm"
     ),
     "F5_everything_pooled": (
-        "every real paired test in the thesis in one family: main sweep + monopoly arm + the "
-        "D9 structural sweep (both its cell_full_factorial and marginal_per_coefficient "
-        "families, which overlap in the underlying runs, so this is deliberately the most "
-        "conservative pooling)"
+        "the D8 main sweep's real tests + the monopoly arm + the D9 structural sweep in one "
+        "family (D9 contributes both its cell_full_factorial and marginal_per_coefficient "
+        "rows, which overlap in the underlying runs, so those runs are double counted on "
+        "purpose); it excludes the Phase 12 OPSD paired tests, which carry no p-value column "
+        "in results/demand_source_comparison.csv; it is the largest family of real tests but "
+        "not the harshest on the headline set, because Holm is step-down and the added D9 "
+        "tests are themselves highly significant, so they raise the family size and the "
+        "headline tests' rank together"
     ),
     "F6_per_cell_k_by_broker_count": (
         "family = the 5 metrics x 2 ablations sharing a single (k, broker_count) cell"
+    ),
+    "F7_everything_pooled_with_degenerates": (
+        "the union of F2 and F5 and the widest family computed here: the D8 main sweep's real "
+        "tests + the 60 deterministic capacity_pnl_only identities + the monopoly arm + the "
+        "D9 structural sweep; it crosses the two axes F2 and F5 vary separately and is the "
+        "harshest definition on the headline set"
     ),
 }
 
@@ -350,7 +389,16 @@ def main() -> int:
         print("    {:<34} {}".format(src, n))
     print("headline tests found: {} (expected 72)".format(n_headline))
     if n_headline != 72:
-        print("  WARNING: headline count is not 72, using what the data supports")
+        # Every number the thesis quotes from this artifact is "of the 72". Shipping a CSV
+        # whose summary rows are computed over some other count would silently contradict
+        # the prose, so this is fatal rather than a warning.
+        raise SystemExit(
+            "headline count is {}, expected 72. HEADLINE_METRICS x HEADLINE_ABLATIONS no "
+            "longer selects the 72 comparisons the thesis reports; either the inputs under "
+            "results/ changed or those two constants did. Refusing to write {}.".format(
+                n_headline, OUTPUT_CSV
+            )
+        )
 
     definitions = family_assignments(pool)
 
@@ -377,11 +425,11 @@ def main() -> int:
                 cross_check_done = True
             corrected_parts.append(block)
         sub = pd.concat(corrected_parts, ignore_index=True)
-        # Survival convention matches scripts/analyze_sweep.py lines 1132-1133 exactly:
-        # non-strict "<= ALPHA", and a degenerate test never counts as surviving. The two
-        # artifacts are read side by side, so they must agree on the threshold on purpose,
-        # not by the accident that no p currently sits at 0.05 and the 60 deterministic
-        # identities happen to carry p_uncorrected = 1.0.
+        # Survival convention matches build_corrected_summary() in scripts/analyze_sweep.py
+        # exactly: non-strict "<= ALPHA", and a degenerate test never counts as surviving.
+        # The two artifacts are read side by side, so they must agree on the threshold on
+        # purpose, not by the accident that no p currently sits at 0.05 and the 60
+        # deterministic identities happen to carry p_uncorrected = 1.0.
         not_degenerate = ~sub["degenerate"].astype(bool)
         sub["survives_holm_alpha05"] = not_degenerate & (sub["p_holm"] <= ALPHA)
         sub["survives_bh_alpha05"] = not_degenerate & (sub["p_bh"] <= ALPHA)
@@ -409,6 +457,7 @@ def main() -> int:
             "test_id": "family_summary|{}".format(family_definition),
             "is_headline_72": "",
             "degenerate": "",
+            "cell_is_stamped_not_native": "",
             "alpha": ALPHA,
             "n_headline_tests": len(head),
             "n_headline_surviving_holm": int(head["survives_holm_alpha05"].sum()),
@@ -490,7 +539,7 @@ def main() -> int:
     )
 
     # cross-check the monopoly p-values against the monopoly comparison file
-    mono_cmp = pd.read_csv(MONOPOLY_CSV)
+    mono_cmp = pd.read_csv(MONOPOLY_CSV, float_precision="round_trip")
     mono_cmp = mono_cmp[mono_cmp["broker_count"] == 1]
     mono_pool = pool[pool["source"] == "monopoly_supplement"]
     gaps = []
