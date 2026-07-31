@@ -843,9 +843,9 @@ def plot_broker_heterogeneity(df: pd.DataFrame) -> None:
     ax_scatter.legend()
 
     fig.suptitle(
-        "Broker heterogeneity under capacity_both: the surcharge is a EUR/kWh quote adder, "
+        "Broker heterogeneity under capacity_both: the surcharge is a EUR/kWh quote adder,\n"
         "equal to capacity_passthrough (a signal-strength coefficient, not a tariff rate) x contribution share",
-        fontsize=10,
+        fontsize=9,
     )
     fig.savefig(PLOTS_DIR / "fig_broker_heterogeneity.png", dpi=150)
     plt.close(fig)
