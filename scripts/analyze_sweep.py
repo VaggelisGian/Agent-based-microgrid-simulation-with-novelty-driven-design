@@ -770,8 +770,9 @@ def plot_metric3_vs_k(summary_df: pd.DataFrame) -> None:
     fig.suptitle(
         "Metric 3 (feeder stability) vs k, by broker_count, with 95 percent CI bands\n"
         "Lower values = more stable feeder load. Shaded band = 95 percent CI across 30 seeds.\n"
-        "Only two distinct curves appear per panel, by construction: pnl_only lies exactly on disabled, and both lies\n"
-        "exactly on pricing_only, because the P&L channel writes nothing into prices (clean channel isolation, Section 6.1).",
+        "Only two distinct curves appear per panel, by construction: pnl_only lies on disabled to within\n"
+        "floating-point noise (about 4.4e-16 on 3 of 360 rows), and both lies exactly on pricing_only (0.0\n"
+        "on all rows), because the P&L channel writes nothing into prices (clean channel isolation, Section 6.1).",
         fontsize=11,
     )
     fig.savefig(PLOTS_DIR / "fig_metric3_vs_k.png", dpi=150)
