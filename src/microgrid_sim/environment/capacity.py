@@ -17,6 +17,13 @@ dimensionless contribution share into a next-step price adder. It is NOT a
 EUR/kWh tariff rate and must never be described as one; charge_rate_eur_per_kwh
 (a EUR per kWh-of-excess coefficient) is the separate quantity that sets the
 CHARGE magnitude.
+
+surcharge_mode (D10) controls only how the SAME total signal strength is
+spread across brokers' next-step surcharges: "proportional" (default, the
+original behaviour) splits it by contribution share; "synchronized" and
+"renormalized" are analysis-only controls that separate desynchronized
+deferral timing from deferred volume (see docs/DECISIONS.md D10). The
+allocations (P&L channel) are always strictly proportional, in every mode.
 """
 
 from __future__ import annotations
@@ -47,6 +54,9 @@ class CapacityStepResult:
     surcharges_eur_per_kwh: dict = field(default_factory=dict)
 
 
+SURCHARGE_MODES = ("proportional", "synchronized", "renormalized")
+
+
 class CapacityMechanism:
     """Stateful rolling-window scarcity-charge calculator (D6).
 
@@ -64,15 +74,19 @@ class CapacityMechanism:
         k: float,
         charge_rate_eur_per_kwh: float,
         capacity_passthrough: float,
+        surcharge_mode: str = "proportional",
     ):
         if window < 1:
             raise ValueError(f"window must be >= 1, got {window}")
         if k < 0:
             raise ValueError(f"k must be >= 0, got {k}")
+        if surcharge_mode not in SURCHARGE_MODES:
+            raise ValueError(f"surcharge_mode must be one of {SURCHARGE_MODES}, got {surcharge_mode!r}")
         self.window = window
         self.k = k
         self.charge_rate_eur_per_kwh = charge_rate_eur_per_kwh
         self.capacity_passthrough = capacity_passthrough
+        self.surcharge_mode = surcharge_mode
 
         self._history: deque[float] = deque(maxlen=window)
 
@@ -125,14 +139,40 @@ class CapacityMechanism:
             allocations = {broker_id: 0.0 for broker_id in broker_ids}
             surcharges = {broker_id: 0.0 for broker_id in broker_ids}
         else:
+            # Allocations (the P&L channel) stay strictly proportional to
+            # contribution share in every mode: D10 only varies how the
+            # pricing channel spreads the same total signal strength across
+            # brokers, never how the ledger charge itself is billed.
             allocations = {
                 broker_id: total_charge * (contribution / sum_positive_contrib)
                 for broker_id, contribution in positive_contrib.items()
             }
-            surcharges = {
-                broker_id: self.capacity_passthrough * (contribution / sum_positive_contrib)
-                for broker_id, contribution in positive_contrib.items()
-            }
+            num_brokers = len(broker_ids)
+            if self.surcharge_mode == "synchronized":
+                # Every broker gets the identical surcharge, including
+                # brokers with zero or negative contribution, so long as the
+                # step levied a charge at all (the early exit above still
+                # zeroes every mode). The sum across brokers is
+                # capacity_passthrough up to float rounding, matching
+                # proportional's total, so total signal strength is preserved
+                # while cross-broker variation is removed entirely (D10).
+                surcharges = {broker_id: self.capacity_passthrough / num_brokers for broker_id in broker_ids}
+            elif self.surcharge_mode == "renormalized":
+                # Rescales proportional's share by broker count so the MEAN
+                # surcharge across brokers stays capacity_passthrough
+                # regardless of N, holding deferred volume roughly constant
+                # across broker counts while cross-broker variation survives
+                # (D10); its own total is therefore capacity_passthrough * N,
+                # not capacity_passthrough.
+                surcharges = {
+                    broker_id: self.capacity_passthrough * (contribution / sum_positive_contrib) * num_brokers
+                    for broker_id, contribution in positive_contrib.items()
+                }
+            else:
+                surcharges = {
+                    broker_id: self.capacity_passthrough * (contribution / sum_positive_contrib)
+                    for broker_id, contribution in positive_contrib.items()
+                }
 
         return CapacityStepResult(threshold, excess, total_charge, allocations, surcharges)
 

@@ -96,6 +96,11 @@ _CAPACITY_MECHANISM_POSITIVE_NUMERIC_KEYS = ("response_reference_eur_per_kwh",)
 # Phase 3b (D7): fractions of base demand / of the deferred bucket, each
 # must lie within [0, 1].
 _CAPACITY_MECHANISM_FRACTION_KEYS = ("deferrable_fraction", "payback_cap_fraction")
+# D10: control arm that separates deferral TIMING from deferral MAGNITUDE
+# (docs/DECISIONS.md D10). Optional, not in _CAPACITY_MECHANISM_KEYS, so every
+# capacity_mechanism block written before this arm existed stays valid; absent
+# means "proportional", the original, unchanged surcharge split.
+_CAPACITY_SURCHARGE_MODES = ("proportional", "synchronized", "renormalized")
 
 
 class ConfigError(ValueError):
@@ -269,3 +274,10 @@ def _validate_capacity_mechanism(config: dict) -> None:
         value = capacity[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0.0 <= value <= 1.0):
             raise ConfigError(f"capacity_mechanism.{key} must be within [0, 1]")
+
+    if "capacity_surcharge_mode" in capacity:
+        mode = capacity["capacity_surcharge_mode"]
+        if mode not in _CAPACITY_SURCHARGE_MODES:
+            raise ConfigError(
+                f"capacity_mechanism.capacity_surcharge_mode must be one of {_CAPACITY_SURCHARGE_MODES}, got {mode!r}"
+            )

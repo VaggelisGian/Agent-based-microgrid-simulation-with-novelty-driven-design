@@ -84,6 +84,11 @@ capacity_mechanism:
   # contribution SHARE into a next-step EUR/kWh price adder. This is NOT a
   # EUR/kWh tariff rate; do not read it as one.
   capacity_passthrough: 0.10
+  # D10: control arm separating deferral TIMING from deferral MAGNITUDE.
+  # "proportional" (default, unchanged) splits capacity_passthrough by
+  # contribution share; "synchronized" and "renormalized" are analysis-only
+  # controls, see docs/DECISIONS.md D10.
+  capacity_surcharge_mode: proportional
   # D7: reference surcharge magnitude (EUR/kWh) against which an agent's own
   # broker surcharge is compared (clipped to [0, 1]) to size how much of its
   # deferrable demand actually gets deferred this hour; a representative

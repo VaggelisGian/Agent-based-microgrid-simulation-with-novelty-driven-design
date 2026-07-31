@@ -163,6 +163,7 @@ class MicrogridModel(mesa.Model):
                 k=capacity_cfg.get("k", 1.0),
                 charge_rate_eur_per_kwh=capacity_cfg.get("charge_rate_eur_per_kwh", 0.15),
                 capacity_passthrough=capacity_cfg.get("capacity_passthrough", 0.10),
+                surcharge_mode=capacity_cfg.get("capacity_surcharge_mode", "proportional"),
             )
 
     def _build_brokers(self, broker_configs: list[dict]) -> dict:

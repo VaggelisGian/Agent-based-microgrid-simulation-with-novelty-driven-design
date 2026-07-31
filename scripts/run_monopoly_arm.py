@@ -44,7 +44,7 @@ MONOPOLY_BROKER_COUNT = 1
 CHECKPOINT_FRACTION = 0.05
 
 MONOPOLY_GRID = tuple(
-    (k, MONOPOLY_BROKER_COUNT, ablation, seed)
+    (k, MONOPOLY_BROKER_COUNT, ablation, seed, "proportional")
     for k in sweep.K_VALUES
     for ablation in sweep.ABLATIONS
     for seed in sweep.SEEDS
@@ -73,6 +73,10 @@ def _load_existing_rows(paths: dict) -> list:
             print(f"WARNING: failed to read existing results file {path}: {exc}", file=sys.stderr)
             continue
         for record in frame.to_dict(orient="records"):
+            # D10: backfill a pre-existing row from before capacity_surcharge_mode
+            # existed, so it keys and reproduces exactly as it always did rather
+            # than being re-run (same rationale as sweep._load_existing_rows).
+            record.setdefault("capacity_surcharge_mode", "proportional")
             try:
                 rows_by_key[sweep._row_key(record)] = record
             except (KeyError, TypeError, ValueError) as exc:
@@ -125,7 +129,9 @@ def main(argv=None) -> int:
                     last_bucket = bucket
 
     frame = pd.DataFrame(all_rows).reindex(columns=sweep.ROW_COLUMNS)
-    frame = frame.sort_values(["k", "broker_count", "ablation", "seed"]).reset_index(drop=True)
+    frame = frame.sort_values(
+        ["k", "broker_count", "ablation", "capacity_surcharge_mode", "seed"]
+    ).reset_index(drop=True)
     try:
         sweep._atomic_write_parquet(frame, paths["parquet"])
         out_path = paths["parquet"]
