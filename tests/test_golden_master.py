@@ -23,6 +23,30 @@ things, matching the five invariants the mechanism's own design log claims:
      k=1.0, broker_count=3, across all four ablations (the Phase 5/6 sweep's
      headline configuration).
 
+Three further pinned digests cover the CSV artifacts that back the thesis's
+most fragile claims and that previously had no regression guard at all, so an
+unnoticed regeneration that silently shifted a number fails loudly here:
+
+  6. results/structural_sensitivity.csv, every data row (the D9 structural
+     coefficient sensitivity analysis);
+  7. results/demand_source_comparison.csv, every data row (the Phase 12
+     synthetic-versus-OPSD headline comparison);
+  8. results/monopoly_comparison.csv, every data row (the broker_count=1
+     monopoly arm).
+
+Items 6 to 8 pin every row keyed by that row's own identity columns, plus the
+CSV's row count, so neither a reordered file nor a vanished or appended row
+can pass silently. Their comparison logic is a pure helper over an
+already-loaded DataFrame, which lets a shipped test point the same code at a
+deliberately perturbed in-memory copy and prove the pin bites, all without
+ever writing the CSV on disk (these CSVs are read-only sweep outputs).
+
+The p-value columns inside those digests are compared by relative tolerance
+alone, on a field kind of their own (see _assert_pvalue_close). An absolute
+tolerance of 1e-9 cannot tell 1e-55 from 1e-20, and those columns are exactly
+where the thesis's significance claims live, so pinning them by magnitude is
+the only pin that means anything.
+
 Expected values live in tests/golden/*.json. Regenerating them is a
 DELIBERATE, explicit act, never a side effect of running the test suite: a
 plain `pytest` invocation must never rewrite these files (see
@@ -37,8 +61,10 @@ intended consequence of a real change, run from the repository root:
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -49,9 +75,16 @@ from microgrid_sim.environment.model import MicrogridModel
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
+RESULTS_DIR = REPO_ROOT / "results"
 SHORT_RUN_GOLDEN_PATH = GOLDEN_DIR / "short_deterministic_run.json"
 SUMMARY_STATS_GOLDEN_PATH = GOLDEN_DIR / "summary_stats_pins.json"
-SUMMARY_STATS_CSV_PATH = REPO_ROOT / "results" / "summary_stats.csv"
+SUMMARY_STATS_CSV_PATH = RESULTS_DIR / "summary_stats.csv"
+STRUCTURAL_SENSITIVITY_GOLDEN_PATH = GOLDEN_DIR / "structural_sensitivity_pins.json"
+STRUCTURAL_SENSITIVITY_CSV_PATH = RESULTS_DIR / "structural_sensitivity.csv"
+DEMAND_SOURCE_GOLDEN_PATH = GOLDEN_DIR / "demand_source_comparison_pins.json"
+DEMAND_SOURCE_CSV_PATH = RESULTS_DIR / "demand_source_comparison.csv"
+MONOPOLY_GOLDEN_PATH = GOLDEN_DIR / "monopoly_comparison_pins.json"
+MONOPOLY_CSV_PATH = RESULTS_DIR / "monopoly_comparison.csv"
 REGENERATE_SCRIPT_PATH = REPO_ROOT / "scripts" / "regenerate_golden_master.py"
 
 # Must match scripts/regenerate_golden_master.py's SHORT_RUN_* constants
@@ -65,6 +98,18 @@ SHORT_SEED = 101  # fixed for reproducibility; arbitrary, not tuned
 
 TIGHT_ABS_TOL = 1e-9
 CLEAN_CHANNEL_ABS_TOL = 1e-12
+
+# Tolerance for the pinned CSV digests (items 5 to 8): these compare numbers
+# that were written to a text file and read back, not recomputed, so anything
+# looser would let a real shift through. Correct for the O(1) quantities in
+# these files (means, effect sizes, percent changes), where an absolute floor
+# of 1e-9 is far below anything that could matter.
+CSV_PIN_REL_TOL = 1e-9
+CSV_PIN_ABS_TOL = 1e-9
+
+# Tolerance for the p-value columns, which get their own kind (see
+# _assert_pvalue_close). Relative only, deliberately: no absolute floor.
+CSV_PIN_PVALUE_REL_TOL = 1e-9
 
 
 def _load_golden(path: Path) -> dict:
@@ -314,6 +359,589 @@ def test_summary_stats_csv_matches_pinned_digest_k1_bc3():
 
 
 # ---------------------------------------------------------------------------
+# Shared machinery for the row-keyed CSV digests (items 6 to 8). Each digest
+# is a PURE comparison over an already-loaded DataFrame plus an already-loaded
+# golden dict, raising AssertionError on any mismatch. That shape is what lets
+# the bite tests below point the very same code at a deliberately perturbed
+# in-memory copy, proving each pin actually fails on a plausible regression,
+# without ever writing the CSV on disk.
+#
+# Each field list below must match the same-named list in
+# scripts/regenerate_golden_master.py exactly, or the pinned snapshot stops
+# describing what these tests check.
+# ---------------------------------------------------------------------------
+
+_MISSING_TOKEN = "__NA__"
+
+STRUCTURAL_SENSITIVITY_IDENTITY = (
+    "scope",
+    "deferrable_fraction",
+    "response_reference_eur_per_kwh",
+    "payback_cap_fraction",
+    "coefficient",
+    "coefficient_level",
+    "metric",
+)
+# Field -> kind. "float" and "pvalue" compare with pytest.approx under
+# different tolerances (see _assert_pinned_field), everything else exactly.
+STRUCTURAL_SENSITIVITY_PINNED_FIELDS = {
+    "n_seeds": "int",
+    "mean_disabled": "float",
+    "mean_both": "float",
+    "paired_mean_diff": "float",
+    "paired_mean_pct_change": "float",
+    "paired_dz": "float",
+    "p_uncorrected": "pvalue",
+    "p_holm": "pvalue",
+    "p_bh": "pvalue",
+    "survives_holm_alpha05": "bool",
+    "survives_bh_alpha05": "bool",
+    "worsened_vs_disabled": "bool",
+    "correction_family": "str",
+    "correction_family_size": "int",
+    "verdict": "str",
+}
+
+DEMAND_SOURCE_IDENTITY = ("k", "broker_count", "ablation", "metric")
+DEMAND_SOURCE_PINNED_FIELDS = {
+    "n_seeds_synthetic": "int",
+    "n_seeds_opsd": "int",
+    "mean_synthetic": "float",
+    "mean_opsd": "float",
+    "std_synthetic": "float",
+    "std_opsd": "float",
+    "delta_opsd_minus_synthetic": "float",
+}
+
+MONOPOLY_IDENTITY = ("broker_count", "k")
+MONOPOLY_PINNED_FIELDS = {
+    "is_monopoly": "bool",
+    "n_seeds": "int",
+    "feeder_peak_to_average_ratio_paired_mean_pct_change": "float",
+    "feeder_peak_to_average_ratio_paired_dz": "float",
+    "feeder_peak_to_average_ratio_paired_p": "pvalue",
+    "feeder_peak_to_average_ratio_n_improved_of_30": "int",
+    "feeder_coefficient_of_variation_paired_mean_pct_change": "float",
+    "feeder_coefficient_of_variation_paired_dz": "float",
+    "feeder_coefficient_of_variation_paired_p": "pvalue",
+    "feeder_coefficient_of_variation_n_improved_of_30": "int",
+    "capacity_both_mean_fire_rate": "float",
+    "capacity_both_mean_total_deferred_kwh": "float",
+    "avg_cost_per_agent_eur_paired_mean_pct_change": "float",
+}
+# Constant across every row of monopoly_comparison.csv, so pinned once at the
+# top level of the golden file and then checked on every row. The sign
+# convention in particular decides how the metric-3 numbers are READ, so a
+# silent edit to it would change the claim without changing any number.
+MONOPOLY_CONSTANT_FIELDS = ("metric3_sign_convention", "note")
+
+# The three row-keyed pinned CSVs, each with the number of p-value columns its
+# header actually carries. Pinned as a count rather than a list so that a
+# p-value column added to one of these files later cannot quietly land back on
+# the "float" kind, and so the claim that demand_source_comparison.csv has no
+# p-value column at all is checked against the real header rather than assumed.
+PINNED_CSV_SPECS = (
+    ("results/structural_sensitivity.csv", STRUCTURAL_SENSITIVITY_CSV_PATH, STRUCTURAL_SENSITIVITY_PINNED_FIELDS, 3),
+    ("results/demand_source_comparison.csv", DEMAND_SOURCE_CSV_PATH, DEMAND_SOURCE_PINNED_FIELDS, 0),
+    ("results/monopoly_comparison.csv", MONOPOLY_CSV_PATH, MONOPOLY_PINNED_FIELDS, 2),
+)
+
+
+def _looks_like_a_pvalue_column(name: str) -> bool:
+    return name == "p" or name.startswith("p_") or name.endswith("_p")
+
+
+def _plain(value):
+    """A numpy/pandas cell as a plain Python object, with missing as None.
+
+    Missing has to collapse to a single representation before anything is
+    compared or keyed on: an empty CSV cell reads back as float NaN, and
+    NaN != NaN, so a raw cell value would not even compare equal to itself.
+    """
+    if value is None:
+        return None
+    if hasattr(value, "item"):  # numpy scalar
+        value = value.item()
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
+def _identity_token(value) -> str:
+    """One deterministic, collision-free string for one identity-column cell.
+
+    Several structural_sensitivity.csv identity columns are empty for some
+    scopes (a coefficient_verdict row has no deferrable_fraction; a
+    cell_full_factorial row has no coefficient), so missing needs an explicit
+    token of its own. It must stay distinct from the literal string "ALL",
+    which those same columns use for a marginal row that genuinely aggregates
+    over every level: "empty" and "ALL" are different statements and must not
+    collide into one key.
+    """
+    plain = _plain(value)
+    if plain is None:
+        return _MISSING_TOKEN
+    if isinstance(plain, str):
+        assert plain != _MISSING_TOKEN, f"identity value collides with the missing token: {plain!r}"
+        return plain
+    return repr(plain)
+
+
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    assert value in ("True", "False"), f"not a boolean literal: {value!r}"
+    return value == "True"
+
+
+def _identity_key(source, identity_columns) -> tuple:
+    return tuple(_identity_token(source[column]) for column in identity_columns)
+
+
+def _rows_by_identity(df, identity_columns) -> dict:
+    rows = {}
+    for _, row in df.iterrows():
+        key = _identity_key(row, identity_columns)
+        assert key not in rows, f"duplicate identity key in CSV: {key}"
+        rows[key] = row
+    return rows
+
+
+def _assert_pvalue_close(actual: float, expected: float, message: str) -> None:
+    """Compare one p-value by RELATIVE tolerance only, with no absolute floor.
+
+    The p-values in these files span roughly 1e-55 to 0.5, so the abs=1e-9 that
+    is right for the O(1) columns would call every significant p-value equal to
+    every other one: 1e-55, 1e-20 and 1e-12 all sit below that floor, and
+    pytest.approx passes on EITHER tolerance. A relative-only comparison pins
+    the magnitude itself, which is what the significance claims actually rest on.
+
+    Exact zero gets its own branch: a relative tolerance around zero is zero, so
+    letting pytest.approx handle it would demand exact equality by accident
+    rather than by decision. Demand it deliberately instead. Every other value
+    goes through pytest.approx with abs=0.0, which multiplies rather than
+    divides, so there is nothing to divide by zero; a denormal expected value
+    simply underflows its own tolerance to zero and therefore also requires
+    exact equality, which is the strict answer rather than an error.
+    """
+    if expected == 0.0:
+        assert actual == 0.0, f"{message}: pinned exactly 0.0, found {actual!r}"
+        return
+    assert actual == pytest.approx(expected, rel=CSV_PIN_PVALUE_REL_TOL, abs=0.0), (
+        f"{message}: pinned {expected!r}, found {actual!r}"
+    )
+
+
+def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, context: str) -> None:
+    expected = expected_row[field]
+    actual = _plain(actual_row[field])
+    if expected is None:
+        assert actual is None, f"{context}: {field} expected empty, found {actual!r}"
+        return
+    assert actual is not None, f"{context}: {field} expected {expected!r}, found empty"
+    if kind == "float":
+        assert float(actual) == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), f"{context}: {field}"
+    elif kind == "pvalue":
+        _assert_pvalue_close(float(actual), expected, f"{context}: {field}")
+    elif kind == "int":
+        assert int(actual) == expected, f"{context}: {field}"
+    elif kind == "bool":
+        assert _as_bool(actual) is expected, f"{context}: {field}"
+    else:
+        assert str(actual) == expected, f"{context}: {field}"
+
+
+def _assert_csv_matches_row_keyed_golden(df, golden: dict, identity_columns, pinned_fields, label: str) -> None:
+    """Compare a whole CSV against a row-keyed golden snapshot.
+
+    Row count first (so a vanished or appended row reports as exactly that),
+    then every pinned row looked up by its own identity key rather than by
+    position, so a reordered file still matches while a changed value in a
+    reordered file still fails.
+    """
+    assert len(df) == golden["n_rows"], f"{label}: row count changed ({len(df)} rows, pinned {golden['n_rows']})"
+    assert len(golden["rows"]) == golden["n_rows"], f"{label}: golden file is internally inconsistent"
+
+    actual_rows = _rows_by_identity(df, identity_columns)
+    for expected_row in golden["rows"]:
+        key = _identity_key(expected_row, identity_columns)
+        assert key in actual_rows, f"{label}: missing row for {key}"
+        actual_row = actual_rows[key]
+        context = f"{label} {key}"
+        for field, kind in pinned_fields.items():
+            _assert_pinned_field(actual_row, expected_row, field, kind, context)
+
+
+def _assert_structural_sensitivity_matches_golden(df, golden: dict) -> None:
+    _assert_csv_matches_row_keyed_golden(
+        df,
+        golden,
+        STRUCTURAL_SENSITIVITY_IDENTITY,
+        STRUCTURAL_SENSITIVITY_PINNED_FIELDS,
+        "results/structural_sensitivity.csv",
+    )
+
+
+def _assert_demand_source_comparison_matches_golden(df, golden: dict) -> None:
+    _assert_csv_matches_row_keyed_golden(
+        df,
+        golden,
+        DEMAND_SOURCE_IDENTITY,
+        DEMAND_SOURCE_PINNED_FIELDS,
+        "results/demand_source_comparison.csv",
+    )
+
+
+def _assert_monopoly_comparison_matches_golden(df, golden: dict) -> None:
+    label = "results/monopoly_comparison.csv"
+    _assert_csv_matches_row_keyed_golden(df, golden, MONOPOLY_IDENTITY, MONOPOLY_PINNED_FIELDS, label)
+    for _, row in df.iterrows():
+        for field in MONOPOLY_CONSTANT_FIELDS:
+            assert str(_plain(row[field])) == golden[field], f"{label}: {field}"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _skip_unless_pinned_csv_available(csv_path: Path, golden_path: Path) -> None:
+    if not csv_path.is_file():
+        pytest.skip(f"{csv_path.name} not present (sweep output, not regenerated by tests): {csv_path}")
+    if not golden_path.is_file():
+        pytest.skip(f"golden file missing: {golden_path}; regenerate deliberately (see module docstring)")
+
+
+def test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals():
+    """The "pvalue" kind, checked directly on its comparison helper.
+
+    Every mismatched pair below sits entirely under the 1e-9 absolute floor the
+    "float" kind uses, so under that floor all of them compared EQUAL, which is
+    asserted here pair by pair before the new helper is asked to reject them.
+    """
+    _assert_pvalue_close(8.930161324964124e-56, 8.930161324964124e-56, "identical")
+    _assert_pvalue_close(0.0, 0.0, "exact zero, the case a relative tolerance cannot express")
+
+    for actual, expected in ((1e-20, 1e-55), (1e-12, 1e-20), (5e-324, 1e-300), (0.0, 1e-55), (1e-55, 0.0)):
+        assert actual == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+            f"the old rule really did call {actual!r} and {expected!r} equal"
+        )
+        with pytest.raises(AssertionError):
+            _assert_pvalue_close(actual, expected, "magnitude moved")
+
+    # Denormals: equal to themselves, not to the next representable value up,
+    # and neither comparison overflows or divides by zero.
+    denormal = 5e-324
+    _assert_pvalue_close(denormal, denormal, "denormal identity")
+    with pytest.raises(AssertionError):
+        _assert_pvalue_close(2.0 * denormal, denormal, "denormal neighbour")
+
+    # An O(1) p-value keeps behaving sensibly: identical passes, a 1e-6 drift
+    # (far larger than the 1e-9 relative tolerance at this magnitude) fails.
+    _assert_pvalue_close(0.4780556677281509, 0.4780556677281509, "O(1) p-value")
+    with pytest.raises(AssertionError):
+        _assert_pvalue_close(0.4780556677281509 + 1e-6, 0.4780556677281509, "O(1) p-value drifted")
+
+
+def test_every_pvalue_column_in_the_pinned_csvs_uses_the_pvalue_kind():
+    """No pinned p-value column may sit on the "float" kind.
+
+    Both directions: every p-value column that is pinned must carry the
+    "pvalue" kind, and nothing else may carry it. The per-file counts also make
+    a later schema change visible, including the zero that records the checked
+    fact that demand_source_comparison.csv carries no p-value column at all.
+    """
+    import pandas as pd
+
+    for label, csv_path, pinned_fields, expected_pvalue_column_count in PINNED_CSV_SPECS:
+        if not csv_path.is_file():
+            pytest.skip(f"{csv_path.name} not present (sweep output, not regenerated by tests): {csv_path}")
+        columns = list(pd.read_csv(csv_path, nrows=0).columns)
+        pvalue_columns = [name for name in columns if _looks_like_a_pvalue_column(name)]
+        assert len(pvalue_columns) == expected_pvalue_column_count, (
+            f"{label}: p-value columns changed, found {pvalue_columns}; classify any new one as \"pvalue\""
+        )
+        pinned_as_pvalue = {name for name, kind in pinned_fields.items() if kind == "pvalue"}
+        assert pinned_as_pvalue == {name for name in pvalue_columns if name in pinned_fields}, (
+            f"{label}: the \"pvalue\" kind and this file's p-value columns disagree"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 6. Pinned digest of results/structural_sensitivity.csv, the D9 structural
+#    coefficient sensitivity analysis, every data row across all three scopes
+#    (cell_full_factorial, marginal_per_coefficient, coefficient_verdict).
+#    Read-only: this test never writes the CSV, and skips (does not fail) if
+#    the analysis output is absent on this machine.
+# ---------------------------------------------------------------------------
+
+
+def test_structural_sensitivity_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(STRUCTURAL_SENSITIVITY_CSV_PATH, STRUCTURAL_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(STRUCTURAL_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(STRUCTURAL_SENSITIVITY_CSV_PATH)
+    _assert_structural_sensitivity_matches_golden(df, golden)
+
+
+def test_structural_sensitivity_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Three regressions this analysis could plausibly suffer, one per copy: the
+    paired statistic silently replaced by the naive change of means (a real
+    hazard here, since both columns sit side by side in this CSV and only the
+    paired one respects the seed pairing), a multiple-comparison survival flag
+    flipping, and a row disappearing. The CSV's own digest is captured before
+    and re-checked after, so the file on disk is provably untouched.
+    """
+    _skip_unless_pinned_csv_available(STRUCTURAL_SENSITIVITY_CSV_PATH, STRUCTURAL_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(STRUCTURAL_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(STRUCTURAL_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(STRUCTURAL_SENSITIVITY_CSV_PATH)
+
+    _assert_structural_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) paired_mean_pct_change silently swapped for the naive change of means.
+    naive_swap = df.copy(deep=True)
+    differ = naive_swap.index[(naive_swap["paired_mean_pct_change"] - naive_swap["naive_pct_change_of_means"]).abs() > 1e-6]
+    assert len(differ) > 0, "expected at least one row where the paired and naive statistics differ"
+    naive_swap.loc[differ[0], "paired_mean_pct_change"] = naive_swap.loc[differ[0], "naive_pct_change_of_means"]
+    with pytest.raises(AssertionError):
+        _assert_structural_sensitivity_matches_golden(naive_swap, golden)
+
+    # (b) a Holm survival flag flips.
+    flipped = df.copy(deep=True)
+    surviving = flipped.index[flipped["survives_holm_alpha05"].eq(True)]
+    assert len(surviving) > 0, "expected at least one row surviving Holm correction"
+    flipped.loc[surviving[0], "survives_holm_alpha05"] = False
+    with pytest.raises(AssertionError):
+        _assert_structural_sensitivity_matches_golden(flipped, golden)
+
+    # (c) a row disappears.
+    dropped = df.drop(index=df.index[-1])
+    with pytest.raises(AssertionError):
+        _assert_structural_sensitivity_matches_golden(dropped, golden)
+
+    assert _sha256(STRUCTURAL_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_structural_sensitivity_pin_bites_on_a_p_value_magnitude_shift():
+    """A p-value moving 35 orders of magnitude, while staying far below 1e-9.
+
+    Under the previous comparison (rel=1e-9 with abs=1e-9, and pytest.approx
+    passes on EITHER tolerance) this exact perturbation PASSED: both the real
+    value and the perturbed one sit under the absolute floor, so the floor alone
+    satisfied the comparison and the magnitude was never pinned at all. The
+    assertion inside the loop reproduces that old rule and shows it calling the
+    two values equal, immediately before the current rule rejects them. Done for
+    all three correction columns, on in-memory copies only.
+    """
+    _skip_unless_pinned_csv_available(STRUCTURAL_SENSITIVITY_CSV_PATH, STRUCTURAL_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(STRUCTURAL_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(STRUCTURAL_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(STRUCTURAL_SENSITIVITY_CSV_PATH)
+
+    _assert_structural_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    perturbed_to = 1e-20  # still hopelessly significant, still far below 1e-9
+    for column in ("p_uncorrected", "p_holm", "p_bh"):
+        moved = df.copy(deep=True)
+        row = moved[column].idxmin()
+        original = float(moved.loc[row, column])
+        assert original < 1e-30, f"{column}: expected a real p-value far below the old absolute floor"
+        assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+            f"{column}: the old rule really did call {original!r} and {perturbed_to!r} equal"
+        )
+        moved.loc[row, column] = perturbed_to
+        with pytest.raises(AssertionError):
+            _assert_structural_sensitivity_matches_golden(moved, golden)
+
+    assert _sha256(STRUCTURAL_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+# ---------------------------------------------------------------------------
+# 7. Pinned digest of results/demand_source_comparison.csv, the Phase 12
+#    synthetic-versus-OPSD headline comparison, every data row. Read-only and
+#    skip-if-absent, same as item 6.
+# ---------------------------------------------------------------------------
+
+
+def test_demand_source_comparison_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(DEMAND_SOURCE_CSV_PATH, DEMAND_SOURCE_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(DEMAND_SOURCE_GOLDEN_PATH)
+    df = pd.read_csv(DEMAND_SOURCE_CSV_PATH)
+    _assert_demand_source_comparison_matches_golden(df, golden)
+
+
+def test_demand_source_comparison_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Regressions specific to a two-source comparison: a rounding-level drift in
+    one mean, the two demand sources swapped in one row (the columns are
+    adjacent and interchangeable in shape, so a mis-ordered merge looks
+    entirely plausible), and a reordered file. A pure reorder must still PASS,
+    because rows are keyed by identity rather than by position; a reorder that
+    also changes a number must still fail.
+    """
+    _skip_unless_pinned_csv_available(DEMAND_SOURCE_CSV_PATH, DEMAND_SOURCE_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(DEMAND_SOURCE_CSV_PATH)
+    golden = _load_golden(DEMAND_SOURCE_GOLDEN_PATH)
+    df = pd.read_csv(DEMAND_SOURCE_CSV_PATH)
+
+    _assert_demand_source_comparison_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) one mean drifts by 1e-6, far too small to notice by eye.
+    drifted = df.copy(deep=True)
+    small_mean = drifted.index[drifted["metric"] == "avg_cost_per_kwh_eur"]
+    assert len(small_mean) > 0
+    drifted.loc[small_mean[0], "mean_opsd"] = drifted.loc[small_mean[0], "mean_opsd"] + 1e-6
+    with pytest.raises(AssertionError):
+        _assert_demand_source_comparison_matches_golden(drifted, golden)
+
+    # (b) the synthetic and OPSD columns swapped in one row.
+    swapped = df.copy(deep=True)
+    differ = swapped.index[(swapped["mean_synthetic"] - swapped["mean_opsd"]).abs() > 1e-6]
+    assert len(differ) > 0, "expected at least one row where the two demand sources differ"
+    row = differ[0]
+    swapped.loc[row, ["mean_synthetic", "mean_opsd"]] = [swapped.loc[row, "mean_opsd"], swapped.loc[row, "mean_synthetic"]]
+    with pytest.raises(AssertionError):
+        _assert_demand_source_comparison_matches_golden(swapped, golden)
+
+    # (c) rows reordered: fine on its own, fatal once a number moves with it.
+    reordered = df.iloc[::-1].reset_index(drop=True)
+    _assert_demand_source_comparison_matches_golden(reordered, golden)
+    reordered_and_changed = reordered.copy(deep=True)
+    nonzero_delta = reordered_and_changed.index[reordered_and_changed["delta_opsd_minus_synthetic"].abs() > 1e-6]
+    assert len(nonzero_delta) > 0
+    reordered_and_changed.loc[nonzero_delta[0], "delta_opsd_minus_synthetic"] *= -1.0
+    with pytest.raises(AssertionError):
+        _assert_demand_source_comparison_matches_golden(reordered_and_changed, golden)
+
+    assert _sha256(DEMAND_SOURCE_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+# ---------------------------------------------------------------------------
+# 8. Pinned digest of results/monopoly_comparison.csv, the broker_count=1
+#    monopoly arm, every data row and every numeric column. Read-only and
+#    skip-if-absent, same as items 6 and 7.
+# ---------------------------------------------------------------------------
+
+
+def test_monopoly_comparison_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(MONOPOLY_CSV_PATH, MONOPOLY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(MONOPOLY_GOLDEN_PATH)
+    df = pd.read_csv(MONOPOLY_CSV_PATH)
+    _assert_monopoly_comparison_matches_golden(df, golden)
+
+
+def test_monopoly_comparison_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Regressions specific to this arm: a seed-count tally off by one, a fire
+    rate reported as a percentage instead of a fraction (this column is a
+    fraction of steps, and the percent/fraction confusion is the classic way
+    it goes wrong), the monopoly flag itself flipping, and a duplicated row
+    appended. The sign-convention note is pinned too, because editing it
+    silently reverses how every metric-3 number in the file is read.
+    """
+    _skip_unless_pinned_csv_available(MONOPOLY_CSV_PATH, MONOPOLY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(MONOPOLY_CSV_PATH)
+    golden = _load_golden(MONOPOLY_GOLDEN_PATH)
+    df = pd.read_csv(MONOPOLY_CSV_PATH)
+
+    _assert_monopoly_comparison_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) an improved-seed tally off by one.
+    off_by_one = df.copy(deep=True)
+    column = "feeder_peak_to_average_ratio_n_improved_of_30"
+    off_by_one.loc[off_by_one.index[0], column] = int(off_by_one.loc[off_by_one.index[0], column]) - 1
+    with pytest.raises(AssertionError):
+        _assert_monopoly_comparison_matches_golden(off_by_one, golden)
+
+    # (b) the fire rate reported as a percentage rather than a fraction.
+    as_percent = df.copy(deep=True)
+    as_percent["capacity_both_mean_fire_rate"] = as_percent["capacity_both_mean_fire_rate"] * 100.0
+    with pytest.raises(AssertionError):
+        _assert_monopoly_comparison_matches_golden(as_percent, golden)
+
+    # (c) the monopoly flag flips on the broker_count=1 arm.
+    misflagged = df.copy(deep=True)
+    monopoly_rows = misflagged.index[misflagged["broker_count"] == 1]
+    assert len(monopoly_rows) > 0, "expected a broker_count=1 arm"
+    misflagged.loc[monopoly_rows[0], "is_monopoly"] = False
+    with pytest.raises(AssertionError):
+        _assert_monopoly_comparison_matches_golden(misflagged, golden)
+
+    # (d) a duplicated row appended.
+    appended = pd.concat([df, df.iloc[[-1]]], ignore_index=True)
+    with pytest.raises(AssertionError):
+        _assert_monopoly_comparison_matches_golden(appended, golden)
+
+    # (e) the metric-3 sign convention silently reworded.
+    reworded = df.copy(deep=True)
+    reworded["metric3_sign_convention"] = "metric3 sign convention: positive diff means IMPROVED stability."
+    with pytest.raises(AssertionError):
+        _assert_monopoly_comparison_matches_golden(reworded, golden)
+
+    assert _sha256(MONOPOLY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_monopoly_comparison_pin_bites_on_a_p_value_magnitude_shift():
+    """The same magnitude shift on the monopoly arm's two paired p-values.
+
+    These are the columns the metric-3 significance claim rests on, and under
+    the previous comparison (rel=1e-9 with abs=1e-9, either sufficing) this
+    exact perturbation PASSED, because both values sit under the absolute floor.
+    The assertion inside the loop reproduces that old rule and shows it calling
+    the two values equal, immediately before the current rule rejects them.
+    In-memory copies only.
+    """
+    _skip_unless_pinned_csv_available(MONOPOLY_CSV_PATH, MONOPOLY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(MONOPOLY_CSV_PATH)
+    golden = _load_golden(MONOPOLY_GOLDEN_PATH)
+    df = pd.read_csv(MONOPOLY_CSV_PATH)
+
+    _assert_monopoly_comparison_matches_golden(df, golden)  # unperturbed: passes
+
+    perturbed_to = 1e-20  # still hopelessly significant, still far below 1e-9
+    for column in ("feeder_peak_to_average_ratio_paired_p", "feeder_coefficient_of_variation_paired_p"):
+        moved = df.copy(deep=True)
+        row = moved[column].idxmin()
+        original = float(moved.loc[row, column])
+        assert original < 1e-30, f"{column}: expected a real p-value far below the old absolute floor"
+        assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+            f"{column}: the old rule really did call {original!r} and {perturbed_to!r} equal"
+        )
+        moved.loc[row, column] = perturbed_to
+        with pytest.raises(AssertionError):
+            _assert_monopoly_comparison_matches_golden(moved, golden)
+
+    assert _sha256(MONOPOLY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+# ---------------------------------------------------------------------------
 # Regeneration guard: a plain pytest run must never rewrite the golden files.
 # scripts/regenerate_golden_master.py sits outside pyproject.toml's testpaths
 # ("tests"), so pytest's collector never looks at it and this module never
@@ -328,8 +956,21 @@ def test_summary_stats_csv_matches_pinned_digest_k1_bc3():
 def test_regeneration_script_import_does_not_write_golden_files():
     assert REGENERATE_SCRIPT_PATH.is_file()
 
-    golden_paths = [path for path in (SHORT_RUN_GOLDEN_PATH, SUMMARY_STATS_GOLDEN_PATH) if path.is_file()]
+    # Every golden file, found by glob rather than by name, so a pin added
+    # later is covered by this guarantee automatically. The named paths below
+    # are then checked to be inside that snapshot, so a rename cannot quietly
+    # drop one of the known pins out of the guard.
+    golden_paths = sorted(GOLDEN_DIR.glob("*.json"))
     assert golden_paths, "expected at least one golden file to already exist"
+    for known_path in (
+        SHORT_RUN_GOLDEN_PATH,
+        SUMMARY_STATS_GOLDEN_PATH,
+        STRUCTURAL_SENSITIVITY_GOLDEN_PATH,
+        DEMAND_SOURCE_GOLDEN_PATH,
+        MONOPOLY_GOLDEN_PATH,
+    ):
+        if known_path.is_file():
+            assert known_path in golden_paths, f"golden file missing from the no-rewrite snapshot: {known_path}"
     mtimes_before = {path: path.stat().st_mtime_ns for path in golden_paths}
 
     spec = importlib.util.spec_from_file_location("_golden_regen_import_probe", REGENERATE_SCRIPT_PATH)
