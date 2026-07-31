@@ -22,12 +22,13 @@ What this writes:
     SHORT_RUN_SEED below; these must match the same-named constants in
     tests/test_golden_master.py or the pinned values stop corresponding to
     what that test actually runs).
-  - tests/golden/summary_stats_pins.json: a field-by-field snapshot of
-    results/summary_stats.csv at k=1.0, broker_count=3, across all four
-    capacity ablations (the Phase 5/6 sweep's headline configuration). Reads
-    that CSV read-only; if it is not present (e.g. the sweep has not been run
-    on this machine) this half of the regeneration is skipped with a printed
-    note and the short-run golden file is still written.
+  - tests/golden/summary_stats_pins.json: a field-by-field snapshot of EVERY
+    data row of results/summary_stats.csv (the Phase 5/6 capacity-mechanism
+    sweep), keyed by (k, broker_count, ablation, metric), plus the row count
+    and every non-identity column the header carries. Reads that CSV
+    read-only; if it is not present (e.g. the sweep has not been run on this
+    machine) this part of the regeneration is skipped with a printed note and
+    the short-run golden file is still written.
   - tests/golden/structural_sensitivity_pins.json: every data row of
     results/structural_sensitivity.csv (the D9 structural coefficient
     sensitivity analysis).
@@ -81,14 +82,32 @@ SHORT_RUN_HORIZON_HOURS = 504
 SHORT_RUN_NUM_AGENTS = 50
 SHORT_RUN_SEED = 101  # fixed for reproducibility; arbitrary, not tuned
 
-# Must match tests/test_golden_master.py's pinned sweep coordinates.
-PINNED_K = 1.0
-PINNED_BROKER_COUNT = 3
-
 # Identity columns and pinned fields for the row-keyed CSV snapshots. Each of
 # these must match the same-named list in tests/test_golden_master.py exactly,
 # or the snapshot written here stops describing what those tests check.
 _MISSING_TOKEN = "__NA__"
+
+SUMMARY_STATS_IDENTITY = ("k", "broker_count", "ablation", "metric")
+# Every non-identity column results/summary_stats.csv carries. The four
+# identity columns plus these fifteen are the whole header, so no column of
+# that file is left unpinned.
+SUMMARY_STATS_PINNED_FIELDS = {
+    "metric_label": "str",
+    "n_seeds": "int",
+    "mean": "float",
+    "std": "float",
+    "ci95_lo": "float",
+    "ci95_hi": "float",
+    "ci95_halfwidth": "float",
+    "vs_disabled_cohens_d_independent": "float",
+    "vs_disabled_paired_dz": "float",
+    "vs_disabled_paired_p": "pvalue",
+    "vs_disabled_paired_mean_diff": "float",
+    "vs_disabled_paired_mean_pct_change": "float",
+    "vs_disabled_degenerate_paired_diff": "bool",
+    "metric3_sign_convention": "str",
+    "notes": "str",
+}
 
 STRUCTURAL_SENSITIVITY_IDENTITY = (
     "scope",
@@ -112,10 +131,31 @@ STRUCTURAL_SENSITIVITY_PINNED_FIELDS = {
     "survives_holm_alpha05": "bool",
     "survives_bh_alpha05": "bool",
     "worsened_vs_disabled": "bool",
+    "ci95_t_lo": "float",
+    "ci95_t_hi": "float",
+    "ci95_boot_lo": "float",
+    "ci95_boot_hi": "float",
+    "ci_disagreement_flag": "bool",
     "correction_family": "str",
     "correction_family_size": "int",
+    # The six coefficient_verdict rows' supporting evidence. The verdict string
+    # alone does not carry it: the sign flip the FRAGILE verdict rests on lives
+    # in min/max_pct_change_across_levels, and no verdict string mentions
+    # significance at all, so significant_at_every_level_holm could flip
+    # without a word of the verdict changing.
+    "min_pct_change_across_levels": "float",
+    "max_pct_change_across_levels": "float",
+    "sign_consistent_across_marginal_levels": "bool",
+    "significant_at_every_level_holm": "bool",
+    "cell_level_sign_consistent_within_every_level": "bool",
+    "levels_with_within_level_cell_sign_disagreement": "str",
     "verdict": "str",
 }
+# Constant across every row of structural_sensitivity.csv, so pinned once at
+# the top level and checked against every row by the test. Same column, same
+# reason as in monopoly_comparison.csv below: rewording it reverses how every
+# metric-3 number in the file is read without changing any number.
+STRUCTURAL_SENSITIVITY_CONSTANT_FIELDS = ("metric3_sign_convention",)
 
 DEMAND_SOURCE_IDENTITY = ("k", "broker_count", "ablation", "metric")
 DEMAND_SOURCE_PINNED_FIELDS = {
@@ -191,46 +231,6 @@ def _compute_short_run_golden() -> dict:
     return golden
 
 
-def _compute_summary_stats_pins() -> dict | None:
-    if not SUMMARY_STATS_CSV_PATH.is_file():
-        print(f"note: {SUMMARY_STATS_CSV_PATH} not present; skipping summary_stats_pins.json regeneration")
-        return None
-
-    import pandas as pd
-
-    df = pd.read_csv(SUMMARY_STATS_CSV_PATH)
-    subset = df[(df["k"] == PINNED_K) & (df["broker_count"] == PINNED_BROKER_COUNT)]
-    if subset.empty:
-        print(f"note: no rows at k={PINNED_K}, broker_count={PINNED_BROKER_COUNT} in {SUMMARY_STATS_CSV_PATH}")
-        return None
-
-    rows = []
-    for _, row in subset.sort_values(["ablation", "metric"]).iterrows():
-        rows.append(
-            {
-                "ablation": row["ablation"],
-                "metric": row["metric"],
-                "n_seeds": int(row["n_seeds"]),
-                "mean": float(row["mean"]),
-                "std": float(row["std"]),
-            }
-        )
-
-    return {
-        "_comment": (
-            "Pinned digest of results/summary_stats.csv (the Phase 5/6 capacity-mechanism "
-            f"sweep) at k={PINNED_K}, broker_count={PINNED_BROKER_COUNT}, across all four "
-            "ablations. results/summary_stats.csv is read-only input here and is never "
-            "written by this script; only this pinned snapshot is written. Regenerate "
-            "DELIBERATELY, never automatically, only after a verified intentional sweep "
-            f"rerun, by running from the repository root: {_REGENERATION_COMMAND}"
-        ),
-        "k": PINNED_K,
-        "broker_count": PINNED_BROKER_COUNT,
-        "rows": rows,
-    }
-
-
 def _plain(value):
     """A numpy/pandas cell as a plain Python object, with missing as None."""
     if value is None:
@@ -295,6 +295,46 @@ def _row_keyed_rows(df, identity_columns, pinned_fields) -> list[dict]:
     return rows
 
 
+def _constant_field_pins(df, constant_fields, csv_path: Path) -> dict:
+    """Top-level pins for columns that are constant across a whole CSV.
+
+    Stored once rather than per row, and checked against every row by the
+    test, so a value that is meant to describe the whole file cannot start
+    disagreeing with itself unnoticed either.
+    """
+    pins = {}
+    for field in constant_fields:
+        distinct = sorted({str(_plain(value)) for value in df[field]})
+        if len(distinct) != 1:
+            print(f"note: {field} is not constant across {csv_path}; pinning the first value only")
+        pins[field] = str(_plain(df[field].iloc[0]))
+    return pins
+
+
+def _compute_summary_stats_pins() -> dict | None:
+    if not SUMMARY_STATS_CSV_PATH.is_file():
+        print(f"note: {SUMMARY_STATS_CSV_PATH} not present; skipping summary_stats_pins.json regeneration")
+        return None
+
+    import pandas as pd
+
+    df = pd.read_csv(SUMMARY_STATS_CSV_PATH)
+    return {
+        "_comment": (
+            "Pinned digest of results/summary_stats.csv (the Phase 5/6 capacity-mechanism "
+            "sweep): every data row and every non-identity column, keyed by "
+            "(k, broker_count, ablation, metric), plus the row count. That key is unique "
+            "over the whole file because the sweep emits exactly one row per "
+            "(k, broker_count, ablation, metric) combination. results/summary_stats.csv is "
+            "read-only input here and is never written by this script; only this pinned "
+            "snapshot is written. Regenerate DELIBERATELY, never automatically, only after "
+            f"a verified intentional sweep rerun, by running from the repository root: {_REGENERATION_COMMAND}"
+        ),
+        "n_rows": int(len(df)),
+        "rows": _row_keyed_rows(df, SUMMARY_STATS_IDENTITY, SUMMARY_STATS_PINNED_FIELDS),
+    }
+
+
 def _compute_structural_sensitivity_pins() -> dict | None:
     if not STRUCTURAL_SENSITIVITY_CSV_PATH.is_file():
         print(f"note: {STRUCTURAL_SENSITIVITY_CSV_PATH} not present; skipping structural_sensitivity_pins.json regeneration")
@@ -303,7 +343,7 @@ def _compute_structural_sensitivity_pins() -> dict | None:
     import pandas as pd
 
     df = pd.read_csv(STRUCTURAL_SENSITIVITY_CSV_PATH)
-    return {
+    pins = {
         "_comment": (
             "Pinned digest of results/structural_sensitivity.csv (the D9 structural "
             "coefficient sensitivity analysis): every data row, keyed by "
@@ -311,15 +351,23 @@ def _compute_structural_sensitivity_pins() -> dict | None:
             "payback_cap_fraction, coefficient, coefficient_level, metric), plus the "
             "row count. An empty identity cell (a coefficient_verdict row has no "
             "deferrable_fraction, a cell_full_factorial row has no coefficient) is "
-            "stored as null and is kept distinct from the literal string ALL. "
-            "results/structural_sensitivity.csv is read-only input here and is never "
-            "written by this script; only this pinned snapshot is written. Regenerate "
-            "DELIBERATELY, never automatically, only after a verified intentional "
-            f"rerun of that analysis, by running from the repository root: {_REGENERATION_COMMAND}"
+            "stored as null and is kept distinct from the literal string ALL. The six "
+            "coefficient_verdict rows pin the evidence behind the verdict string, not "
+            "just the string: the percent-change range whose sign flip IS the fragility "
+            "finding, and the per-level significance and cell-level agreement flags, "
+            "none of which the verdict wording mentions. metric3_sign_convention is "
+            "constant across the file, so it is pinned once here and checked against "
+            "every row. results/structural_sensitivity.csv is read-only input here and "
+            "is never written by this script; only this pinned snapshot is written. "
+            "Regenerate DELIBERATELY, never automatically, only after a verified "
+            "intentional rerun of that analysis, by running from the repository root: "
+            f"{_REGENERATION_COMMAND}"
         ),
         "n_rows": int(len(df)),
         "rows": _row_keyed_rows(df, STRUCTURAL_SENSITIVITY_IDENTITY, STRUCTURAL_SENSITIVITY_PINNED_FIELDS),
     }
+    pins.update(_constant_field_pins(df, STRUCTURAL_SENSITIVITY_CONSTANT_FIELDS, STRUCTURAL_SENSITIVITY_CSV_PATH))
+    return pins
 
 
 def _compute_demand_source_comparison_pins() -> dict | None:
@@ -369,11 +417,7 @@ def _compute_monopoly_comparison_pins() -> dict | None:
         "n_rows": int(len(df)),
         "rows": _row_keyed_rows(df, MONOPOLY_IDENTITY, MONOPOLY_PINNED_FIELDS),
     }
-    for field in MONOPOLY_CONSTANT_FIELDS:
-        distinct = sorted({str(_plain(value)) for value in df[field]})
-        if len(distinct) != 1:
-            print(f"note: {field} is not constant across {MONOPOLY_CSV_PATH}; pinning the first value only")
-        pins[field] = str(_plain(df[field].iloc[0]))
+    pins.update(_constant_field_pins(df, MONOPOLY_CONSTANT_FIELDS, MONOPOLY_CSV_PATH))
     return pins
 
 
@@ -389,11 +433,8 @@ def main() -> None:
 
     _write_golden(SHORT_RUN_GOLDEN_PATH, _compute_short_run_golden())
 
-    summary_stats_golden = _compute_summary_stats_pins()
-    if summary_stats_golden is not None:
-        _write_golden(SUMMARY_STATS_GOLDEN_PATH, summary_stats_golden)
-
     for golden_path, compute in (
+        (SUMMARY_STATS_GOLDEN_PATH, _compute_summary_stats_pins),
         (STRUCTURAL_SENSITIVITY_GOLDEN_PATH, _compute_structural_sensitivity_pins),
         (DEMAND_SOURCE_GOLDEN_PATH, _compute_demand_source_comparison_pins),
         (MONOPOLY_GOLDEN_PATH, _compute_monopoly_comparison_pins),
