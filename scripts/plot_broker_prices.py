@@ -243,11 +243,20 @@ def _plot_innovation_hist(ax, innovations: np.ndarray, stats_block: dict) -> Non
     ax.set_xlabel("Hourly price innovation (EUR/kWh)", color=INK)
     ax.set_ylabel("Count (log scale)", color=INK)
     ax.set_title("Innovations have heavier tails than a Gaussian", color=INK, fontsize=11)
+    # Headroom for the two labels that live in the top of this panel (the legend at
+    # the top right and the df / kurtosis annotation at the top left). Without it the
+    # tallest bars and the Gaussian reference curve run straight through them: the
+    # "sample excess kurtosis" line was struck through by the Gaussian curve and sat
+    # on top of the bars, which made it unreadable. The axis is logarithmic, so the
+    # clear band is added in decades above the tallest bar. This changes only how much
+    # empty space sits above the data; no plotted value is altered.
+    bottom, top = ax.get_ylim()
+    ax.set_ylim(bottom, top * 10**2.8)
     ax.legend(loc="upper right", frameon=False, fontsize=8)
     excess_kurtosis = float(stats.kurtosis(innovations, fisher=True))
     ax.text(
         0.02,
-        0.96,
+        0.98,
         f"df = {stats_block['df']}\nsample excess kurtosis = {excess_kurtosis:.1f}",
         transform=ax.transAxes,
         va="top",

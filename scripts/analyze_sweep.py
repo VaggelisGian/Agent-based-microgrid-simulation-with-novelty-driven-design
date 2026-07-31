@@ -217,6 +217,25 @@ CI_DISAGREEMENT_WIDTH_RATIO = 2.0  # flag a disagreement if one CI is >= 2x the 
 _DEFAULT_COLORS = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 ABLATION_COLOR = {ablation: _DEFAULT_COLORS[i % len(_DEFAULT_COLORS)] for i, ablation in enumerate(ABLATION_ORDER)}
 
+# Draw styles for the coincident ablation pairs on the physical metrics. On those
+# metrics capacity_pnl_only reproduces capacity_disabled exactly, and capacity_both
+# reproduces capacity_pricing_only exactly, because the P&L channel debits broker
+# ledgers and writes nothing into any price (clean channel isolation, see
+# docs/thesis/06_results.md Section 6.1 and the module docstring above). Drawn with
+# one uniform style the overplotted member of each pair is completely invisible, so
+# the legend advertises four series while the panel shows two and the figure reads as
+# broken rather than as the result it is. Each underlying series is therefore drawn
+# thick and solid with a large marker, and the series that lands exactly on top of it
+# thin and dashed with a small marker, so both members stay readable and the
+# concentric markers show the coincidence. Presentation only: no plotted value is
+# offset, rescaled, or otherwise altered.
+ABLATION_LINE_STYLE = {
+    "capacity_disabled": {"linestyle": "-", "linewidth": 3.6, "markersize": 8.5, "zorder": 2},
+    "capacity_pnl_only": {"linestyle": (0, (5, 2.5)), "linewidth": 1.5, "markersize": 3.4, "zorder": 4},
+    "capacity_pricing_only": {"linestyle": "-", "linewidth": 3.6, "markersize": 8.5, "zorder": 3},
+    "capacity_both": {"linestyle": (0, (5, 2.5)), "linewidth": 1.5, "markersize": 3.4, "zorder": 5},
+}
+
 
 # ---------------------------------------------------------------------------
 # Small stats helpers
@@ -717,7 +736,7 @@ def plot_metric3_vs_k(summary_df: pd.DataFrame) -> None:
                 y = line["mean"].to_numpy(dtype=float)
                 halfwidth = line["ci95_halfwidth"].to_numpy(dtype=float)
                 color = ABLATION_COLOR[ablation]
-                ax.plot(x, y, marker="o", label=ABLATION_SHORT[ablation], color=color)
+                ax.plot(x, y, marker="o", label=ABLATION_SHORT[ablation], color=color, **ABLATION_LINE_STYLE[ablation])
                 ax.fill_between(x, y - halfwidth, y + halfwidth, color=color, alpha=0.15)
             ax.set_title(f"broker_count = {bc}")
             if row_idx == len(metric_rows) - 1:
@@ -736,10 +755,23 @@ def plot_metric3_vs_k(summary_df: pd.DataFrame) -> None:
         style="italic",
     )
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside lower center", ncol=len(ABLATION_ORDER), frameon=False)
+    fig.legend(
+        handles,
+        labels,
+        loc="outside lower center",
+        ncol=len(ABLATION_ORDER),
+        frameon=False,
+        title=(
+            "Each coincident pair is drawn as a thick solid line with its partner dashed on top, "
+            "so both members of the pair stay visible."
+        ),
+        title_fontsize=9,
+    )
     fig.suptitle(
         "Metric 3 (feeder stability) vs k, by broker_count, with 95 percent CI bands\n"
-        "Lower values = more stable feeder load. Shaded band = 95 percent CI across 30 seeds.",
+        "Lower values = more stable feeder load. Shaded band = 95 percent CI across 30 seeds.\n"
+        "Only two distinct curves appear per panel, by construction: pnl_only lies exactly on disabled, and both lies\n"
+        "exactly on pricing_only, because the P&L channel writes nothing into prices (clean channel isolation, Section 6.1).",
         fontsize=11,
     )
     fig.savefig(PLOTS_DIR / "fig_metric3_vs_k.png", dpi=150)
@@ -783,12 +815,47 @@ def plot_fire_rate(df: pd.DataFrame) -> None:
     # not touch the physical dynamics that the threshold/fire-rate calc depends on), and
     # differs only very slightly from capacity_pnl_only, which runs the same threshold
     # mechanic WITHOUT the deferral response feeding back into feeder net import.
+    #
+    # Presentation note: the broker_count = 3 and broker_count = 5 curves nearly
+    # coincide in the measured data, closely enough that with one uniform style the
+    # bc = 3 curve is drawn over completely and disappears. This is a NEAR-coincidence
+    # in the measured means, not an identity the model guarantees (unlike the
+    # capacity_pnl_only / capacity_disabled pair in fig_metric3_vs_k.png), so the two
+    # are separated by linestyle, marker shape and linewidth only, and the measured
+    # gap is stated in the panel and computed below from the same means that are
+    # plotted. No plotted value is offset or altered.
+    style_by_bc = {
+        2: {"linestyle": "-", "linewidth": 1.8, "marker": "o", "markersize": 6.0, "zorder": 2},
+        3: {"linestyle": "-", "linewidth": 3.6, "marker": "o", "markersize": 9.0, "zorder": 3},
+        5: {"linestyle": (0, (5, 2.5)), "linewidth": 1.6, "marker": "s", "markersize": 3.8, "zorder": 4},
+    }
     fig, ax = plt.subplots(figsize=(7, 5))
     sub_both = df[df["ablation"] == "capacity_both"]
+    mean_by_bc = {}
     for bc in BROKER_COUNTS:
         line = sub_both[sub_both["broker_count"] == bc].groupby("k")["capacity_fire_rate"].mean().reset_index()
         line = line.sort_values("k")
-        ax.plot(line["k"], line["capacity_fire_rate"], marker="o", label=f"broker_count = {bc}")
+        mean_by_bc[bc] = line["capacity_fire_rate"].to_numpy(dtype=float)
+        ax.plot(line["k"], line["capacity_fire_rate"], label=f"broker_count = {bc}", **style_by_bc[bc])
+
+    # Closeness of the two near-coincident curves, measured from the plotted means.
+    # The relative bound is rounded UP to one decimal so the stated "under" figure is
+    # never smaller than the measured maximum.
+    gap = np.abs(mean_by_bc[3] - mean_by_bc[5])
+    rel_gap_pct = 100.0 * np.max(gap / mean_by_bc[5])
+    rel_gap_bound = np.ceil(rel_gap_pct * 10.0) / 10.0
+    ax.text(
+        0.02,
+        0.06,
+        "broker_count = 3 and 5 nearly coincide in the measured data (a near-coincidence,\n"
+        f"not an identity): largest gap {np.max(gap):.1e} in fire rate, under {rel_gap_bound:.1f} percent of the\n"
+        "broker_count = 5 value at every k. Drawn thick solid vs thin dashed so both read.",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=7.5,
+        style="italic",
+    )
     ax.set_xlabel("k (capacity threshold multiplier)")
     ax.set_ylabel("capacity_fire_rate (fraction of hours charged)")
     ax.set_xticks(list(K_VALUES))
@@ -845,7 +912,7 @@ def plot_broker_heterogeneity(df: pd.DataFrame) -> None:
     fig.suptitle(
         "Broker heterogeneity under capacity_both: the surcharge is a EUR/kWh quote adder,\n"
         "equal to capacity_passthrough (a signal-strength coefficient, not a tariff rate) x contribution share",
-        fontsize=9,
+        fontsize=10,
     )
     fig.savefig(PLOTS_DIR / "fig_broker_heterogeneity.png", dpi=150)
     plt.close(fig)
