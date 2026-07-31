@@ -730,8 +730,21 @@ def plot_structural_sensitivity(cell_df: pd.DataFrame, marginal_df: pd.DataFrame
         ax.set_title(f"Marginal effect vs {coefficient}", fontsize=10)
         ax.set_xticks(list(COEFFICIENT_LEVELS[coefficient]))
 
-    handles, labels = fig.axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="outside upper right", frameon=False, fontsize=9)
+    # Legend placement: anchored inside the first top-row panel, NOT at the
+    # figure's outside upper right. Under layout="constrained" both the
+    # suptitle and an "outside upper right" figure legend are pinned to the
+    # very top of the figure, so the legend sat on top of the end of the
+    # suptitle's third line. Anchoring to this panel's axes (resolved at draw
+    # time, after the layout engine has placed the axes) puts the legend in a
+    # region that is empty in this data and cannot reach the suptitle band.
+    # It stays a figure-level legend: the two colours are the same in all
+    # three top-row panels.
+    ax_first = fig.axes[0]
+    handles, labels = ax_first.get_legend_handles_labels()
+    fig.legend(
+        handles, labels, loc="upper left", bbox_to_anchor=(0.02, 0.98),
+        bbox_transform=ax_first.transAxes, frameon=False, fontsize=9,
+    )
 
     for panel_idx, metric in enumerate(METRIC3_KEYS):
         ax = fig.add_subplot(gs[1, panel_idx])
