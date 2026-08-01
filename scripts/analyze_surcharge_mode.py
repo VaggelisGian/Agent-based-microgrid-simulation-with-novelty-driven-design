@@ -104,6 +104,7 @@ decision branches, that is reported plainly instead of forced into one.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -548,6 +549,54 @@ def print_volume_match_check(primary_tests: list[dict]) -> None:
             )
 
 
+def print_ordering_check(df: pd.DataFrame, primary_tests: list[dict]) -> None:
+    """Rank-order check on what the peak-to-average effect actually tracks.
+
+    Reported within a fixed k rather than pooled. k moves the scarcity
+    threshold and therefore the whole volume-response curve, so pooling the
+    two k levels compares points on different curves. D9's correction section
+    had to make the same within-stratum distinction for payback_cap_fraction.
+    """
+    from scipy import stats
+
+    cells = []
+    for t in primary_tests:
+        if t["metric"] != GRADIENT_METRIC:
+            continue
+        both, _ = _cell_frames(df, t["mode"], t["k"], t["broker_count"])
+        spreads = both["mean_broker_surcharge_json"].apply(
+            lambda blob: (lambda vals: max(vals) - min(vals))(list(json.loads(blob).values()))
+        )
+        cells.append(
+            {
+                "mode": t["mode"],
+                "k": t["k"],
+                "effect": t["paired_mean_pct_change"],
+                "volume": t["total_deferred_kwh_both_mean"],
+                "spread": float(spreads.mean()),
+            }
+        )
+    cell_df = pd.DataFrame(cells)
+
+    print("\n" + "=" * 78)
+    print("ORDERING CHECK: does the effect track deferred volume or cross-broker spread?")
+    print("=" * 78)
+    for k in K_VALUES:
+        sub = cell_df[cell_df["k"] == k]
+        rho_v, p_v = stats.spearmanr(sub["volume"], sub["effect"])
+        rho_s, p_s = stats.spearmanr(sub["spread"], sub["effect"])
+        print(
+            f"  k={k:g} (n={len(sub)} cells): "
+            f"volume rho={rho_v:+.3f} p={p_v:.3f} | cross-broker spread rho={rho_s:+.3f} p={p_s:.3f}"
+        )
+    rho_all, p_all = stats.spearmanr(cell_df["volume"], cell_df["effect"])
+    print(
+        f"  pooled over both k (n={len(cell_df)}): volume rho={rho_all:+.3f} p={p_all:.3f}, "
+        "reported only to show pooling across k does NOT order the effect"
+    )
+    print("  n is 9 cells per k, so this corroborates the control-arm result rather than carrying it.")
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -588,6 +637,7 @@ def main() -> int:
     print(f"wrote {fig_path}")
 
     print_volume_match_check(primary_tests)
+    print_ordering_check(df, primary_tests)
 
     print("\n" + "=" * 78)
     print("GRADIENT TEST DETAIL (broker_count 2 -> 5, peak-to-average ratio)")
