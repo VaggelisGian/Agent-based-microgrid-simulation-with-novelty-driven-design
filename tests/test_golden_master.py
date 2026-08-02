@@ -53,6 +53,27 @@ real per-test row), alongside the file's total row count as a shape guard
 covering the rows that subset does not otherwise look at. See
 FAMILY_SENSITIVITY_IDENTITY's comment below for the full reasoning.
 
+Phase 18.3 adds three more items, pinning the D11 dose-matched-monopoly arm
+(docs/DECISIONS.md's "## D11." and "## D11 result:" sections) now that its
+artifacts exist:
+
+  15. results/dose_matched_monopoly.csv (46 rows), pinned WHOLE the same way
+      effect_sizes.csv and summary_stats_corrected.csv are: small enough that
+      a claim-bearing subset would save nothing;
+  16. results/sweep_dose_matched_monopoly.parquet: a shape pin (row count and
+      exact column set, matching items 10/11's style for the other four raw
+      sweep parquets) plus a per-(k, capacity_surcharge_divisor, ablation)
+      cell aggregate pin (row count and six metric means), reusing
+      _assert_csv_matches_row_keyed_golden/_row_keyed_rows over a derived,
+      groupby-aggregated DataFrame rather than inventing a second comparison
+      helper for aggregates that no CSV happens to cover directly;
+  17. the two guardrail invariants D11 result measures rather than assumes:
+      capacity_disabled rows are bit-identical across divisor and against the
+      shipped monopoly arm (exact equality, not a tolerance: this was
+      measured at exactly 0.0), and divisor 2 matches divisor 1 exactly on
+      the physical metrics while differing on cost (the vacuity-trap check:
+      a divisor that silently did nothing would still pass the first half).
+
 A column that is constant across a whole file gets pinned once, at the top
 level of that file's golden snapshot, and is then checked against every row.
 Both such columns today are metric3_sign_convention, in
@@ -112,10 +133,16 @@ FAMILY_SENSITIVITY_GOLDEN_PATH = GOLDEN_DIR / "family_sensitivity_pins.json"
 FAMILY_SENSITIVITY_CSV_PATH = RESULTS_DIR / "family_sensitivity.csv"
 SUMMARY_STATS_CORRECTED_GOLDEN_PATH = GOLDEN_DIR / "summary_stats_corrected_pins.json"
 SUMMARY_STATS_CORRECTED_CSV_PATH = RESULTS_DIR / "summary_stats_corrected.csv"
+DOSE_MATCHED_MONOPOLY_GOLDEN_PATH = GOLDEN_DIR / "dose_matched_monopoly_pins.json"
+DOSE_MATCHED_MONOPOLY_CSV_PATH = RESULTS_DIR / "dose_matched_monopoly.csv"
+SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH = (
+    GOLDEN_DIR / "sweep_dose_matched_monopoly_parquet_cell_pins.json"
+)
 SWEEP_RAW_PARQUET_PATH = RESULTS_DIR / "sweep_raw.parquet"
 SWEEP_MONOPOLY_PARQUET_PATH = RESULTS_DIR / "sweep_monopoly.parquet"
 SWEEP_OPSD_HEADLINE_PARQUET_PATH = RESULTS_DIR / "sweep_opsd_headline.parquet"
 SWEEP_STRUCTURAL_PARQUET_PATH = RESULTS_DIR / "sweep_structural.parquet"
+SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH = RESULTS_DIR / "sweep_dose_matched_monopoly.parquet"
 REGENERATE_SCRIPT_PATH = REPO_ROOT / "scripts" / "regenerate_golden_master.py"
 
 # Must match scripts/regenerate_golden_master.py's SHORT_RUN_* constants
@@ -570,6 +597,99 @@ SUMMARY_STATS_CORRECTED_PINNED_FIELDS = {
     "notes": "str",
 }
 
+# results/dose_matched_monopoly.csv (D11's dose-matched-monopoly arm,
+# Phase 18.1) is 46 rows: pinned WHOLE, the same way effect_sizes.csv and
+# summary_stats_corrected.csv are, since a claim-bearing subset would save
+# nothing at this size. (scope, arm, k, metric) is unique over the whole
+# file: each of the seven arms (monopoly at divisor 1/2/3/5, broker_count
+# 2/3/5) reports at most one row per (scope, k, metric) combination it
+# carries, the decisive_contrast scope's one arm
+# (mono_divisor_3_minus_bc_3) does the same, and no two arms share a name;
+# _rows_by_identity asserts this rather than assuming it.
+DOSE_MATCHED_MONOPOLY_IDENTITY = ("scope", "arm", "k", "metric")
+# Every non-identity column results/dose_matched_monopoly.csv carries. The
+# four identity columns plus these twenty-eight are the whole header, so no
+# column of that file is left unpinned. Several of these are legitimately
+# empty on some rows (capacity_surcharge_divisor and comparator_arm are only
+# populated for the monopoly and decisive_contrast arms respectively;
+# paired_mean_pct_change/paired_mean_diff_raw are empty on the
+# decisive_contrast rows, which report pct_point_diff_mono_minus_comparator
+# instead), which _assert_pinned_field's None-handling already covers.
+DOSE_MATCHED_MONOPOLY_PINNED_FIELDS = {
+    "arm_type": "str",
+    "capacity_surcharge_divisor": "float",
+    "broker_count": "int",
+    "comparator_arm": "str",
+    "data_source": "str",
+    "n_seeds": "int",
+    "paired_mean_pct_change": "float",
+    "pct_point_diff_mono_minus_comparator": "float",
+    "paired_mean_diff_raw": "float",
+    "paired_dz": "float",
+    "p_uncorrected": "pvalue",
+    "p_holm": "pvalue",
+    "p_bh": "pvalue",
+    "survives_holm_alpha05": "bool",
+    "survives_bh_alpha05": "bool",
+    "ci95_t_lo": "float",
+    "ci95_t_hi": "float",
+    "ci95_boot_lo": "float",
+    "ci95_boot_hi": "float",
+    "n_favorable_of_n_seeds": "int",
+    "total_deferred_kwh_capacity_both_mean": "float",
+    "total_deferred_kwh_capacity_disabled_mean": "float",
+    "comparator_total_deferred_kwh_capacity_both_mean": "float",
+    "deferred_volume_ratio_mono_over_comparator": "float",
+    "correction_family": "str",
+    "correction_family_size": "int",
+    "metric3_sign_convention": "str",
+    "notes": "str",
+}
+
+# Per-(k, capacity_surcharge_divisor, ablation) cell aggregates over
+# results/sweep_dose_matched_monopoly.parquet: the row count (30 in every one
+# of the 12 cells) and the mean of the six metrics docs/DECISIONS.md's "D11
+# result" section quotes directly from this parquet (the peak-to-average
+# table and the guardrail paragraph), none of which any pinned CSV covers on
+# its own. Must match the same-named constants in
+# scripts/regenerate_golden_master.py exactly.
+DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY = ("k", "capacity_surcharge_divisor", "ablation")
+DOSE_MATCHED_MONOPOLY_PARQUET_CELL_FIELDS = {
+    "n_rows": "int",
+    "mean_total_deferred_kwh": "float",
+    "mean_feeder_peak_to_average_ratio": "float",
+    "mean_feeder_coefficient_of_variation": "float",
+    "mean_avg_cost_per_agent_eur": "float",
+    "mean_capacity_fire_rate": "float",
+    "mean_total_capacity_charge_eur": "float",
+}
+
+
+def _dose_matched_monopoly_parquet_cell_aggregates(df):
+    """One row per (k, capacity_surcharge_divisor, ablation) cell of
+    results/sweep_dose_matched_monopoly.parquet (12 cells, 30 seeds each).
+
+    Shaped exactly like any other pinned CSV in this module (identity columns
+    plus pinned fields), on purpose: the parquet's own rows are one per
+    (cell, seed), not one per cell, so this aggregates first and then hands
+    the result to the SAME _assert_csv_matches_row_keyed_golden /
+    _row_keyed_rows machinery every whole-file CSV digest already uses,
+    rather than inventing a second comparison helper for a second snapshot
+    shape. Twin of the same-named function in
+    scripts/regenerate_golden_master.py; must compute identically or the
+    golden snapshot stops describing what this checks.
+    """
+    return df.groupby(list(DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY), as_index=False).agg(
+        n_rows=("seed", "size"),
+        mean_total_deferred_kwh=("total_deferred_kwh", "mean"),
+        mean_feeder_peak_to_average_ratio=("feeder_peak_to_average_ratio", "mean"),
+        mean_feeder_coefficient_of_variation=("feeder_coefficient_of_variation", "mean"),
+        mean_avg_cost_per_agent_eur=("avg_cost_per_agent_eur", "mean"),
+        mean_capacity_fire_rate=("capacity_fire_rate", "mean"),
+        mean_total_capacity_charge_eur=("total_capacity_charge_eur", "mean"),
+    )
+
+
 # results/family_sensitivity.csv is 1227 rows, about ten times
 # structural_sensitivity.csv's 124 (the largest whole-file digest pinned so
 # far, at 177891 bytes on disk). A whole-file digest built the same way here
@@ -895,6 +1015,7 @@ PINNED_CSV_SPECS = (
     ("results/monopoly_comparison.csv", MONOPOLY_CSV_PATH, MONOPOLY_PINNED_FIELDS, 2),
     ("results/effect_sizes.csv", EFFECT_SIZES_CSV_PATH, EFFECT_SIZES_PINNED_FIELDS, 1),
     ("results/summary_stats_corrected.csv", SUMMARY_STATS_CORRECTED_CSV_PATH, SUMMARY_STATS_CORRECTED_PINNED_FIELDS, 3),
+    ("results/dose_matched_monopoly.csv", DOSE_MATCHED_MONOPOLY_CSV_PATH, DOSE_MATCHED_MONOPOLY_PINNED_FIELDS, 3),
 )
 
 
@@ -1121,6 +1242,29 @@ def _assert_summary_stats_corrected_matches_golden(df, golden: dict) -> None:
     _assert_csv_matches_row_keyed_golden(
         df, golden, SUMMARY_STATS_CORRECTED_IDENTITY, SUMMARY_STATS_CORRECTED_PINNED_FIELDS,
         "results/summary_stats_corrected.csv", SUMMARY_STATS_CORRECTED_GOLDEN_PATH.name,
+    )
+
+
+def _assert_dose_matched_monopoly_matches_golden(df, golden: dict) -> None:
+    _assert_csv_matches_row_keyed_golden(
+        df, golden, DOSE_MATCHED_MONOPOLY_IDENTITY, DOSE_MATCHED_MONOPOLY_PINNED_FIELDS,
+        "results/dose_matched_monopoly.csv", DOSE_MATCHED_MONOPOLY_GOLDEN_PATH.name,
+    )
+
+
+def _assert_dose_matched_monopoly_parquet_cells_match_golden(df, golden: dict) -> None:
+    """df is the RAW sweep_dose_matched_monopoly.parquet (one row per (cell,
+    seed)); this aggregates it to one row per cell before reusing the same
+    row-keyed comparison every whole-file CSV digest uses. See
+    _dose_matched_monopoly_parquet_cell_aggregates's own docstring for why
+    aggregating first, rather than inventing a second comparison helper, is
+    the right shape here.
+    """
+    grouped = _dose_matched_monopoly_parquet_cell_aggregates(df)
+    _assert_csv_matches_row_keyed_golden(
+        grouped, golden, DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY, DOSE_MATCHED_MONOPOLY_PARQUET_CELL_FIELDS,
+        "results/sweep_dose_matched_monopoly.parquet (per-cell aggregates)",
+        SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH.name,
     )
 
 
@@ -3208,6 +3352,555 @@ def test_family_sensitivity_csv_column_set_pin_bites_on_growth_and_shrinkage():
 
 
 # ---------------------------------------------------------------------------
+# 15. Pinned digest of results/dose_matched_monopoly.csv, D11's dose-matched-
+#     monopoly arm (docs/DECISIONS.md's "## D11." and "## D11 result:"
+#     sections, Phase 18.1): every data row and every column, keyed by
+#     (scope, arm, k, metric). Pinned WHOLE, the same way effect_sizes.csv and
+#     summary_stats_corrected.csv are (see DOSE_MATCHED_MONOPOLY_IDENTITY's
+#     comment above): 46 rows is small enough that a claim-bearing subset
+#     would save nothing. Read-only, skip-if-absent, same as items 12 and 13.
+# ---------------------------------------------------------------------------
+
+
+def test_dose_matched_monopoly_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(DOSE_MATCHED_MONOPOLY_CSV_PATH, DOSE_MATCHED_MONOPOLY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(DOSE_MATCHED_MONOPOLY_GOLDEN_PATH)
+    df = pd.read_csv(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+    _assert_dose_matched_monopoly_matches_golden(df, golden)
+
+
+def test_dose_matched_monopoly_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Six regressions specific to this file: a percent change's sign flipping
+    (a reported improvement becomes a reported worsening at the same
+    magnitude), the realized-deferred-volume mean drifting by 1 percent (the
+    figure D11's whole "dose matched" reading rests on: the arm's verdict
+    depends on the volume lining up, not only the effect), a paired-seed
+    favorable-count tally off by one, a Holm survival flag flipping, a row's
+    own identity silently colliding with another row's (the same arm and
+    metric, relabelled from one shipped k level onto the other, which
+    _rows_by_identity's own duplicate-key guard must catch), and a row
+    disappearing. The CSV's own digest is captured before and re-checked
+    after, so the file on disk is provably untouched.
+    """
+    _skip_unless_pinned_csv_available(DOSE_MATCHED_MONOPOLY_CSV_PATH, DOSE_MATCHED_MONOPOLY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+    golden = _load_golden(DOSE_MATCHED_MONOPOLY_GOLDEN_PATH)
+    df = pd.read_csv(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+
+    _assert_dose_matched_monopoly_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) a percent change's sign flips: a reported improvement becomes a
+    #     reported worsening at the same magnitude.
+    flipped = df.copy(deep=True)
+    nonzero_pct = flipped.index[flipped["paired_mean_pct_change"].abs() > 1e-6]
+    assert len(nonzero_pct) > 0, "expected at least one non-degenerate paired_mean_pct_change"
+    row = nonzero_pct[0]
+    flipped.loc[row, "paired_mean_pct_change"] = -flipped.loc[row, "paired_mean_pct_change"]
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_matches_golden(flipped, golden)
+
+    # (b) the realized deferred-volume mean drifts by 1 percent: small enough
+    #     to pass a casual eyeball check, and this is the figure D11's whole
+    #     "dose matched" reading rests on.
+    drifted = df.copy(deep=True)
+    nonzero_deferred = drifted.index[drifted["total_deferred_kwh_capacity_both_mean"].abs() > 1e-6]
+    assert len(nonzero_deferred) > 0
+    row = nonzero_deferred[0]
+    drifted.loc[row, "total_deferred_kwh_capacity_both_mean"] *= 1.01
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_matches_golden(drifted, golden)
+
+    # (c) a paired-seed favorable-count tally off by one.
+    off_by_one = df.copy(deep=True)
+    column = "n_favorable_of_n_seeds"
+    off_by_one.loc[off_by_one.index[0], column] = int(off_by_one.loc[off_by_one.index[0], column]) - 1
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_matches_golden(off_by_one, golden)
+
+    # (d) a Holm survival flag flips.
+    flag_flipped = df.copy(deep=True)
+    surviving = flag_flipped.index[flag_flipped["survives_holm_alpha05"].eq(True)]
+    assert len(surviving) > 0, "expected at least one row surviving Holm correction"
+    flag_flipped.loc[surviving[0], "survives_holm_alpha05"] = False
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_matches_golden(flag_flipped, golden)
+
+    # (e) a row's identity silently collides with another row's: the same
+    #     arm and metric, relabelled from one shipped k level to the other,
+    #     which _rows_by_identity's own duplicate-key guard must catch.
+    collided = df.copy(deep=True)
+    mono1_rows = collided.index[
+        (collided["arm"] == "mono_divisor_1")
+        & (collided["scope"] == "arm_vs_own_baseline")
+        & (collided["metric"] == "feeder_peak_to_average_ratio")
+    ]
+    assert len(mono1_rows) == 2, "expected exactly one k=0.5 and one k=1.0 row for this (scope, arm, metric)"
+    collided.loc[mono1_rows[0], "k"] = collided.loc[mono1_rows[1], "k"]
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_matches_golden(collided, golden)
+
+    # (f) a row disappears.
+    dropped = df.drop(index=df.index[-1])
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_matches_golden(dropped, golden)
+
+    assert _sha256(DOSE_MATCHED_MONOPOLY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_dose_matched_monopoly_pin_bites_on_a_p_value_magnitude_shift():
+    """A p-value moving far in magnitude while staying far below the old
+    absolute floor: under the previous rel=1e-9/abs=1e-9 comparison (either
+    tolerance sufficing) this exact perturbation PASSED, because both values
+    sit under the absolute floor. The assertion inside reproduces that old
+    rule and shows it calling the two values equal, immediately before the
+    current rule rejects them. Done for all three correction columns, each
+    time picking the smallest NONZERO p in that column: two rows of this file
+    carry an exact 0.0, which the "pvalue" kind's own zero branch already
+    covers in test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals.
+    """
+    _skip_unless_pinned_csv_available(DOSE_MATCHED_MONOPOLY_CSV_PATH, DOSE_MATCHED_MONOPOLY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+    golden = _load_golden(DOSE_MATCHED_MONOPOLY_GOLDEN_PATH)
+    df = pd.read_csv(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+
+    _assert_dose_matched_monopoly_matches_golden(df, golden)  # unperturbed: passes
+
+    perturbed_to = 1e-20  # still hopelessly significant, still far below 1e-9
+    for column in ("p_uncorrected", "p_holm", "p_bh"):
+        moved = df.copy(deep=True)
+        nonzero = moved.index[moved[column] > 0.0]
+        row = moved.loc[nonzero, column].idxmin()
+        original = float(moved.loc[row, column])
+        assert original < 1e-30, f"{column}: expected a real p-value far below the old absolute floor"
+        assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+            f"{column}: the old rule really did call {original!r} and {perturbed_to!r} equal"
+        )
+        moved.loc[row, column] = perturbed_to
+        with pytest.raises(AssertionError):
+            _assert_dose_matched_monopoly_matches_golden(moved, golden)
+
+    assert _sha256(DOSE_MATCHED_MONOPOLY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+DOSE_MATCHED_MONOPOLY_COLUMNS = (
+    "scope",
+    "arm",
+    "arm_type",
+    "capacity_surcharge_divisor",
+    "broker_count",
+    "comparator_arm",
+    "data_source",
+    "k",
+    "metric",
+    "n_seeds",
+    "paired_mean_pct_change",
+    "pct_point_diff_mono_minus_comparator",
+    "paired_mean_diff_raw",
+    "paired_dz",
+    "p_uncorrected",
+    "p_holm",
+    "p_bh",
+    "survives_holm_alpha05",
+    "survives_bh_alpha05",
+    "ci95_t_lo",
+    "ci95_t_hi",
+    "ci95_boot_lo",
+    "ci95_boot_hi",
+    "n_favorable_of_n_seeds",
+    "total_deferred_kwh_capacity_both_mean",
+    "total_deferred_kwh_capacity_disabled_mean",
+    "comparator_total_deferred_kwh_capacity_both_mean",
+    "deferred_volume_ratio_mono_over_comparator",
+    "correction_family",
+    "correction_family_size",
+    "metric3_sign_convention",
+    "notes",
+)
+
+
+def test_dose_matched_monopoly_csv_column_set_matches_pinned():
+    _skip_unless_results_artifact_available(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+    import pandas as pd
+
+    header = pd.read_csv(DOSE_MATCHED_MONOPOLY_CSV_PATH, nrows=0).columns
+    _assert_exact_column_set(header, DOSE_MATCHED_MONOPOLY_COLUMNS, "results/dose_matched_monopoly.csv")
+
+
+def test_dose_matched_monopoly_csv_column_set_pin_bites_on_growth_and_shrinkage():
+    _skip_unless_results_artifact_available(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+    import pandas as pd
+
+    header = list(pd.read_csv(DOSE_MATCHED_MONOPOLY_CSV_PATH, nrows=0).columns)
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(
+            header + ["a_new_column"], DOSE_MATCHED_MONOPOLY_COLUMNS, "results/dose_matched_monopoly.csv"
+        )
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(header[:-1], DOSE_MATCHED_MONOPOLY_COLUMNS, "results/dose_matched_monopoly.csv")
+
+
+# ---------------------------------------------------------------------------
+# 16. results/sweep_dose_matched_monopoly.parquet (D11's dose-matched-
+#     monopoly arm, Phase 18.1): a shape pin (row count and exact column set,
+#     matching items 10/11's style for the other four raw sweep parquets)
+#     plus a per-(k, capacity_surcharge_divisor, ablation) cell aggregate pin
+#     that no CSV happens to cover directly (see
+#     DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY's comment above): the row
+#     count (30 in every cell) and the mean of the six metrics
+#     docs/DECISIONS.md's "D11 result" section quotes straight from this
+#     parquet.
+# ---------------------------------------------------------------------------
+
+# sweep_dose_matched_monopoly.parquet is written by the same per-run metrics
+# writer as the other four raw sweep parquets, PLUS the two D11-specific
+# columns capacity_surcharge_mode and capacity_surcharge_divisor.
+SWEEP_DOSE_MATCHED_MONOPOLY_COLUMNS = SWEEP_RAW_COLUMNS + ("capacity_surcharge_mode", "capacity_surcharge_divisor")
+SWEEP_DOSE_MATCHED_MONOPOLY_ROW_COUNT = 360  # 2 k levels x 3 divisors x 2 ablations x 30 seeds
+
+
+def test_sweep_dose_matched_monopoly_parquet_shape_matches_pinned():
+    _skip_unless_results_artifact_available(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    import pandas as pd
+
+    df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    _assert_parquet_shape(
+        df, SWEEP_DOSE_MATCHED_MONOPOLY_ROW_COUNT, SWEEP_DOSE_MATCHED_MONOPOLY_COLUMNS,
+        "results/sweep_dose_matched_monopoly.parquet",
+    )
+
+
+def test_sweep_dose_matched_monopoly_parquet_shape_pin_bites_on_growth_shrinkage_and_row_count_drift():
+    _skip_unless_results_artifact_available(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    import pandas as pd
+
+    digest_before = _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+
+    grown = df.copy(deep=True)
+    grown["a_new_column"] = 0.0
+    with pytest.raises(AssertionError):
+        _assert_parquet_shape(
+            grown, SWEEP_DOSE_MATCHED_MONOPOLY_ROW_COUNT, SWEEP_DOSE_MATCHED_MONOPOLY_COLUMNS,
+            "results/sweep_dose_matched_monopoly.parquet",
+        )
+
+    shrunk = df.drop(columns=["peak_rss_mb"])
+    with pytest.raises(AssertionError):
+        _assert_parquet_shape(
+            shrunk, SWEEP_DOSE_MATCHED_MONOPOLY_ROW_COUNT, SWEEP_DOSE_MATCHED_MONOPOLY_COLUMNS,
+            "results/sweep_dose_matched_monopoly.parquet",
+        )
+
+    appended = pd.concat([df, df.iloc[[-1]]], ignore_index=True)
+    with pytest.raises(AssertionError):
+        _assert_parquet_shape(
+            appended, SWEEP_DOSE_MATCHED_MONOPOLY_ROW_COUNT, SWEEP_DOSE_MATCHED_MONOPOLY_COLUMNS,
+            "results/sweep_dose_matched_monopoly.parquet",
+        )
+
+    dropped = df.drop(index=df.index[-1])
+    with pytest.raises(AssertionError):
+        _assert_parquet_shape(
+            dropped, SWEEP_DOSE_MATCHED_MONOPOLY_ROW_COUNT, SWEEP_DOSE_MATCHED_MONOPOLY_COLUMNS,
+            "results/sweep_dose_matched_monopoly.parquet",
+        )
+
+    assert _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH) == digest_before, "bite test must not touch the parquet on disk"
+
+
+def test_sweep_dose_matched_monopoly_parquet_cell_aggregates_match_pinned_digest():
+    _skip_unless_pinned_csv_available(
+        SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH, SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH
+    )
+
+    import pandas as pd
+
+    golden = _load_golden(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH)
+    df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    _assert_dose_matched_monopoly_parquet_cells_match_golden(df, golden)
+
+
+def test_sweep_dose_matched_monopoly_parquet_cell_aggregate_pin_bites_on_plausible_regressions():
+    """Prove the per-cell aggregate pin above is not vacuous, on in-memory
+    copies of the raw (per-seed) parquet rows only.
+
+    Three regressions: a cell's mean drifting by 1 percent (small enough to
+    pass a casual eyeball check, and this is exactly the kind of aggregate
+    D11 result's peak-to-average table quotes), a single row's own cell
+    identity mislabelled so one cell loses a row and its neighbour gains one
+    (both cells' n_rows should read exactly 30, the row-count-per-cell
+    guarantee this arm's design calls out), and a whole cell vanishing, as if
+    a resweep silently skipped one (k, divisor, ablation) combination. The
+    parquet's own digest is captured before and re-checked after, so the file
+    on disk is provably untouched.
+    """
+    _skip_unless_pinned_csv_available(
+        SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH, SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH
+    )
+
+    import pandas as pd
+
+    digest_before = _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    golden = _load_golden(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH)
+    df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+
+    _assert_dose_matched_monopoly_parquet_cells_match_golden(df, golden)  # unperturbed: passes
+
+    # (a) a cell's mean drifts by 1 percent.
+    drifted = df.copy(deep=True)
+    target = drifted.index[
+        (drifted["k"] == 1.0)
+        & (drifted["capacity_surcharge_divisor"] == 3)
+        & (drifted["ablation"] == "capacity_both")
+    ]
+    assert len(target) == 30
+    drifted.loc[target, "total_deferred_kwh"] = drifted.loc[target, "total_deferred_kwh"] * 1.01
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_parquet_cells_match_golden(drifted, golden)
+
+    # (b) one row's cell identity mislabelled: a divisor=3 row relabelled as
+    #     divisor=2, so the divisor=3 cell loses a row (29, not 30) and the
+    #     divisor=2 cell gains one (31, not 30), at the same k and ablation.
+    mislabelled = df.copy(deep=True)
+    source = mislabelled.index[
+        (mislabelled["k"] == 0.5)
+        & (mislabelled["capacity_surcharge_divisor"] == 3)
+        & (mislabelled["ablation"] == "capacity_both")
+    ]
+    assert len(source) == 30
+    mislabelled.loc[source[0], "capacity_surcharge_divisor"] = 2
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_parquet_cells_match_golden(mislabelled, golden)
+
+    # (c) a whole cell vanishes, as if a resweep silently skipped it.
+    vanished_mask = (
+        (df["k"] == 1.0) & (df["capacity_surcharge_divisor"] == 5) & (df["ablation"] == "capacity_disabled")
+    )
+    assert vanished_mask.sum() == 30
+    vanished = df[~vanished_mask]
+    with pytest.raises(AssertionError):
+        _assert_dose_matched_monopoly_parquet_cells_match_golden(vanished, golden)
+
+    assert _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH) == digest_before, "bite test must not touch the parquet on disk"
+
+
+# ---------------------------------------------------------------------------
+# 17. The two D11 result guardrail invariants (docs/DECISIONS.md's "## D11
+#     result:" section): MEASURED there, not merely asserted by construction,
+#     and pinned here as their own explicit tests because a later change that
+#     silently broke either one would be the single most consequential
+#     regression this arm could suffer without D11's own verdict noticing.
+# ---------------------------------------------------------------------------
+
+# The seven columns D11 result names explicitly for the first invariant:
+# peak-to-average, coefficient of variation, cost, deferred energy, charge,
+# fire rate and self-sufficiency.
+DOSE_MATCHED_MONOPOLY_GUARDRAIL_COLUMNS = (
+    "feeder_peak_to_average_ratio",
+    "feeder_coefficient_of_variation",
+    "avg_cost_per_agent_eur",
+    "total_deferred_kwh",
+    "total_capacity_charge_eur",
+    "capacity_fire_rate",
+    "prosumer_self_sufficiency",
+)
+
+
+def _rows_by_seed(df, k: float, ablation: str, filter_column: str, filter_value):
+    subset = df[(df["k"] == k) & (df["ablation"] == ablation) & (df[filter_column] == filter_value)]
+    return subset.sort_values("seed").reset_index(drop=True)
+
+
+def _assert_capacity_disabled_rows_bit_identical(dose_matched_df, monopoly_df, k: float) -> None:
+    """The guardrail D11 result measures: with the pricing channel off, the
+    divisor cannot do anything, so every capacity_disabled row must be
+    EXACTLY the shipped baseline, not approximately. Exact equality (==), not
+    a tolerance: D11 result reports this at precisely 0.0 maximum absolute
+    divergence, and a tolerance here would hide the thing this test exists to
+    catch (a stray dependency of the disabled code path on the divisor).
+    """
+    divisor2 = _rows_by_seed(dose_matched_df, k, "capacity_disabled", "capacity_surcharge_divisor", 2)
+    divisor3 = _rows_by_seed(dose_matched_df, k, "capacity_disabled", "capacity_surcharge_divisor", 3)
+    divisor5 = _rows_by_seed(dose_matched_df, k, "capacity_disabled", "capacity_surcharge_divisor", 5)
+    shipped = _rows_by_seed(monopoly_df, k, "capacity_disabled", "broker_count", 1)
+
+    assert len(divisor2) == 30 and len(divisor3) == 30 and len(divisor5) == 30 and len(shipped) == 30
+    seeds = list(divisor2["seed"])
+    for other in (divisor3, divisor5, shipped):
+        assert list(other["seed"]) == seeds, f"k={k}: seed ordering must match before a positional == is meaningful"
+
+    for column in DOSE_MATCHED_MONOPOLY_GUARDRAIL_COLUMNS:
+        for label, other in (("divisor 3", divisor3), ("divisor 5", divisor5), ("shipped monopoly arm", shipped)):
+            assert (divisor2[column].to_numpy() == other[column].to_numpy()).all(), (
+                f"k={k}, {column}: divisor 2 is not bit-identical to {label}"
+            )
+
+
+def test_dose_matched_monopoly_capacity_disabled_rows_bit_identical_across_divisors_and_vs_shipped_monopoly():
+    _skip_unless_results_artifact_available(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    _skip_unless_results_artifact_available(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    import pandas as pd
+
+    dose_matched_df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    monopoly_df = pd.read_parquet(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    for k in (0.5, 1.0):
+        _assert_capacity_disabled_rows_bit_identical(dose_matched_df, monopoly_df, k)
+
+
+def test_dose_matched_monopoly_capacity_disabled_guardrail_bites_on_a_nudged_divisor_row():
+    _skip_unless_results_artifact_available(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    _skip_unless_results_artifact_available(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    import pandas as pd
+
+    dm_digest_before = _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    mono_digest_before = _sha256(SWEEP_MONOPOLY_PARQUET_PATH)
+    dose_matched_df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    monopoly_df = pd.read_parquet(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    _assert_capacity_disabled_rows_bit_identical(dose_matched_df, monopoly_df, 0.5)  # unperturbed: passes
+
+    nudged = dose_matched_df.copy(deep=True)
+    target = nudged.index[
+        (nudged["k"] == 0.5)
+        & (nudged["ablation"] == "capacity_disabled")
+        & (nudged["capacity_surcharge_divisor"] == 3)
+    ]
+    assert len(target) == 30
+    nudged.loc[target[0], "feeder_peak_to_average_ratio"] += 1e-9
+    with pytest.raises(AssertionError):
+        _assert_capacity_disabled_rows_bit_identical(nudged, monopoly_df, 0.5)
+
+    assert _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH) == dm_digest_before, (
+        "bite test must not touch the parquet on disk"
+    )
+    assert _sha256(SWEEP_MONOPOLY_PARQUET_PATH) == mono_digest_before, "bite test must not touch the parquet on disk"
+
+
+def _assert_divisor2_equals_divisor1_but_cost_differs(dose_matched_df, monopoly_df, k: float) -> None:
+    """The other D11 result invariant, and its own vacuity trap made explicit.
+
+    Divisor 2's firing-hour surcharge (capacity_passthrough / 2 = 0.05) and
+    divisor 1's (capacity_passthrough / 1 = 0.10) both clip to the same
+    deferral factor of 1.0 (see docs/DECISIONS.md's "Why divisor 2 changes
+    nothing physical" subsection), so the PHYSICAL columns must be exactly
+    identical. Asserting only that would pass against a divisor that is
+    silently inert (never applied at all), because an inert divisor would
+    leave EVERY column, cost included, identical to divisor 1 too. The second
+    half rules that out: cost must actually differ, on every paired seed, not
+    merely on average, because cost is not saturated the way the physical
+    response is. That second half is the only part of this invariant that
+    proves the divisor was actually applied rather than doing nothing; a test
+    that asserted only the first half would pass against a broken divisor
+    that did nothing at all.
+    """
+    divisor2 = _rows_by_seed(dose_matched_df, k, "capacity_both", "capacity_surcharge_divisor", 2)
+    divisor1 = _rows_by_seed(monopoly_df, k, "capacity_both", "broker_count", 1)
+
+    assert len(divisor2) == 30 and len(divisor1) == 30
+    assert list(divisor2["seed"]) == list(divisor1["seed"]), (
+        f"k={k}: seed ordering must match before a positional comparison is meaningful"
+    )
+
+    physical_columns = ("total_deferred_kwh", "feeder_peak_to_average_ratio", "feeder_coefficient_of_variation")
+    for column in physical_columns:
+        assert (divisor2[column].to_numpy() == divisor1[column].to_numpy()).all(), (
+            f"k={k}, {column}: divisor 2 is not bit-identical to divisor 1"
+        )
+
+    # The half that rules out a divisor that does nothing at all: every one
+    # of the 30 paired seeds must show a strictly different cost, not merely
+    # a different mean (a mean can differ while individual rows coincide).
+    cost2 = divisor2["avg_cost_per_agent_eur"].to_numpy()
+    cost1 = divisor1["avg_cost_per_agent_eur"].to_numpy()
+    assert (cost2 != cost1).all(), f"k={k}: divisor 2's cost must differ from divisor 1's, or the divisor is inert"
+
+
+def test_dose_matched_monopoly_divisor_2_matches_divisor_1_on_physical_metrics_but_differs_on_cost():
+    _skip_unless_results_artifact_available(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    _skip_unless_results_artifact_available(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    import pandas as pd
+
+    dose_matched_df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    monopoly_df = pd.read_parquet(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    for k in (0.5, 1.0):
+        _assert_divisor2_equals_divisor1_but_cost_differs(dose_matched_df, monopoly_df, k)
+
+
+def test_dose_matched_monopoly_divisor_2_vs_divisor_1_bites_on_a_nudged_row_and_on_a_simulated_inert_divisor():
+    """Two bites on the same invariant, each closing a different half.
+
+    First, the identity half: a divisor-2 row nudged so it no longer equals
+    divisor 1 on a physical column. Second, and this is the vacuity-trap
+    check R2/D11 both call for: a copy where divisor 2's cost is overwritten,
+    seed for seed, to equal divisor 1's exactly, simulating a divisor that
+    was silently never applied at all. The identity half alone would NOT
+    catch this second case (the physical columns are untouched and still
+    match); only the "cost must differ" half does, which is exactly why both
+    halves are asserted rather than only the first.
+    """
+    _skip_unless_results_artifact_available(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    _skip_unless_results_artifact_available(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    import pandas as pd
+
+    dm_digest_before = _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    mono_digest_before = _sha256(SWEEP_MONOPOLY_PARQUET_PATH)
+    dose_matched_df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    monopoly_df = pd.read_parquet(SWEEP_MONOPOLY_PARQUET_PATH)
+
+    _assert_divisor2_equals_divisor1_but_cost_differs(dose_matched_df, monopoly_df, 0.5)  # unperturbed: passes
+
+    # (a) the identity half: a divisor-2 row nudged off divisor 1.
+    nudged = dose_matched_df.copy(deep=True)
+    target = nudged.index[
+        (nudged["k"] == 0.5) & (nudged["ablation"] == "capacity_both") & (nudged["capacity_surcharge_divisor"] == 2)
+    ]
+    assert len(target) == 30
+    nudged.loc[target[0], "total_deferred_kwh"] += 1.0
+    with pytest.raises(AssertionError):
+        _assert_divisor2_equals_divisor1_but_cost_differs(nudged, monopoly_df, 0.5)
+
+    # (b) the vacuity trap: simulate a divisor that does nothing at all, by
+    #     overwriting divisor 2's cost column with divisor 1's, seed for seed
+    #     (mapped by seed, not position, so this is correct regardless of
+    #     either dataframe's row order). The physical columns are untouched,
+    #     so only the "cost must differ" half of the invariant catches this.
+    inert = dose_matched_df.copy(deep=True)
+    target = inert.index[
+        (inert["k"] == 0.5) & (inert["ablation"] == "capacity_both") & (inert["capacity_surcharge_divisor"] == 2)
+    ]
+    assert len(target) == 30
+    reference = monopoly_df[
+        (monopoly_df["k"] == 0.5) & (monopoly_df["ablation"] == "capacity_both") & (monopoly_df["broker_count"] == 1)
+    ]
+    cost_by_seed = reference.set_index("seed")["avg_cost_per_agent_eur"]
+    inert.loc[target, "avg_cost_per_agent_eur"] = inert.loc[target, "seed"].map(cost_by_seed).to_numpy()
+    with pytest.raises(AssertionError):
+        _assert_divisor2_equals_divisor1_but_cost_differs(inert, monopoly_df, 0.5)
+
+    assert _sha256(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH) == dm_digest_before, (
+        "bite test must not touch the parquet on disk"
+    )
+    assert _sha256(SWEEP_MONOPOLY_PARQUET_PATH) == mono_digest_before, "bite test must not touch the parquet on disk"
+
+
+# ---------------------------------------------------------------------------
 # Regeneration guard: a plain pytest run must never rewrite the golden files.
 # scripts/regenerate_golden_master.py sits outside pyproject.toml's testpaths
 # ("tests"), so pytest's collector never looks at it and this module never
@@ -3237,6 +3930,8 @@ def test_regeneration_script_import_does_not_write_golden_files():
         EFFECT_SIZES_GOLDEN_PATH,
         SUMMARY_STATS_CORRECTED_GOLDEN_PATH,
         FAMILY_SENSITIVITY_GOLDEN_PATH,
+        DOSE_MATCHED_MONOPOLY_GOLDEN_PATH,
+        SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH,
     ):
         if known_path.is_file():
             assert known_path in golden_paths, f"golden file missing from the no-rewrite snapshot: {known_path}"

@@ -45,10 +45,18 @@ What this writes:
   - tests/golden/family_sensitivity_pins.json: a CLAIM-BEARING SUBSET (not
     every row; see FAMILY_SENSITIVITY_IDENTITY's comment below) of
     results/family_sensitivity.csv, plus that file's total row count.
+  - tests/golden/dose_matched_monopoly_pins.json: every data row of
+    results/dose_matched_monopoly.csv (D11's dose-matched-monopoly arm,
+    Phase 18.1), pinned whole (46 rows).
+  - tests/golden/sweep_dose_matched_monopoly_parquet_cell_pins.json: per-(k,
+    capacity_surcharge_divisor, ablation) cell aggregates (row count plus six
+    metric means) over results/sweep_dose_matched_monopoly.parquet, the
+    claim-bearing numbers behind D11 result that no CSV covers directly.
 
-Every CSV named above is READ-ONLY input here. This script writes nothing but
-tests/golden/*.json, and each CSV-derived snapshot is skipped with a printed
-note, rather than failing, when its source CSV is absent on this machine.
+Every CSV or parquet named above is READ-ONLY input here. This script writes
+nothing but tests/golden/*.json, and each derived snapshot is skipped with a
+printed note, rather than failing, when its source file is absent on this
+machine.
 """
 
 from __future__ import annotations
@@ -87,6 +95,12 @@ FAMILY_SENSITIVITY_GOLDEN_PATH = GOLDEN_DIR / "family_sensitivity_pins.json"
 FAMILY_SENSITIVITY_CSV_PATH = _RESULTS_DIR / "family_sensitivity.csv"
 SUMMARY_STATS_CORRECTED_GOLDEN_PATH = GOLDEN_DIR / "summary_stats_corrected_pins.json"
 SUMMARY_STATS_CORRECTED_CSV_PATH = _RESULTS_DIR / "summary_stats_corrected.csv"
+DOSE_MATCHED_MONOPOLY_GOLDEN_PATH = GOLDEN_DIR / "dose_matched_monopoly_pins.json"
+DOSE_MATCHED_MONOPOLY_CSV_PATH = _RESULTS_DIR / "dose_matched_monopoly.csv"
+SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH = (
+    GOLDEN_DIR / "sweep_dose_matched_monopoly_parquet_cell_pins.json"
+)
+SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH = _RESULTS_DIR / "sweep_dose_matched_monopoly.parquet"
 
 # Must match tests/test_golden_master.py's SHORT_HORIZON_HOURS / SHORT_NUM_AGENTS
 # / SHORT_SEED exactly. Horizon comfortably exceeds the 168h rolling window
@@ -305,6 +319,87 @@ FAMILY_SENSITIVITY_PINNED_ROW_KEYS = (
     ("F7_everything_pooled_with_degenerates", "family_summary|F7_everything_pooled_with_degenerates"),
     ("F1_main_sweep_primary_120", "main|k=1|bc=3|capacity_both|feeder_coefficient_of_variation"),
 )
+
+# results/dose_matched_monopoly.csv (D11's dose-matched-monopoly arm, Phase
+# 18.1): 46 rows, small enough to pin whole rather than as a subset. Each of
+# the three arm families (monopoly at divisor 1/2/3/5, broker_count 2/3/5,
+# and the divisor-3-vs-broker_count-3 decisive contrast) reports at most one
+# row per (scope, k, metric) combination, so (scope, arm, k, metric) is
+# unique over the whole file; verified in tests/test_golden_master.py rather
+# than assumed. Must match the same-named constants in that file exactly.
+DOSE_MATCHED_MONOPOLY_IDENTITY = ("scope", "arm", "k", "metric")
+DOSE_MATCHED_MONOPOLY_PINNED_FIELDS = {
+    "arm_type": "str",
+    "capacity_surcharge_divisor": "float",
+    "broker_count": "int",
+    "comparator_arm": "str",
+    "data_source": "str",
+    "n_seeds": "int",
+    "paired_mean_pct_change": "float",
+    "pct_point_diff_mono_minus_comparator": "float",
+    "paired_mean_diff_raw": "float",
+    "paired_dz": "float",
+    "p_uncorrected": "pvalue",
+    "p_holm": "pvalue",
+    "p_bh": "pvalue",
+    "survives_holm_alpha05": "bool",
+    "survives_bh_alpha05": "bool",
+    "ci95_t_lo": "float",
+    "ci95_t_hi": "float",
+    "ci95_boot_lo": "float",
+    "ci95_boot_hi": "float",
+    "n_favorable_of_n_seeds": "int",
+    "total_deferred_kwh_capacity_both_mean": "float",
+    "total_deferred_kwh_capacity_disabled_mean": "float",
+    "comparator_total_deferred_kwh_capacity_both_mean": "float",
+    "deferred_volume_ratio_mono_over_comparator": "float",
+    "correction_family": "str",
+    "correction_family_size": "int",
+    "metric3_sign_convention": "str",
+    "notes": "str",
+}
+
+# Per-(k, capacity_surcharge_divisor, ablation) cell aggregates over
+# results/sweep_dose_matched_monopoly.parquet: the row count (30 in every one
+# of the 12 cells) and the mean of the six metrics docs/DECISIONS.md's "D11
+# result" section quotes (the peak-to-average table and the guardrail
+# paragraph). Must match the same-named constants in
+# tests/test_golden_master.py exactly.
+DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY = ("k", "capacity_surcharge_divisor", "ablation")
+DOSE_MATCHED_MONOPOLY_PARQUET_CELL_FIELDS = {
+    "n_rows": "int",
+    "mean_total_deferred_kwh": "float",
+    "mean_feeder_peak_to_average_ratio": "float",
+    "mean_feeder_coefficient_of_variation": "float",
+    "mean_avg_cost_per_agent_eur": "float",
+    "mean_capacity_fire_rate": "float",
+    "mean_total_capacity_charge_eur": "float",
+}
+
+
+def _dose_matched_monopoly_parquet_cell_aggregates(df):
+    """One row per (k, capacity_surcharge_divisor, ablation) cell of
+    results/sweep_dose_matched_monopoly.parquet (12 cells, 30 seeds each).
+
+    Shaped exactly like any other pinned CSV here (identity columns plus
+    pinned fields), on purpose: the parquet's own rows are one per
+    (cell, seed), not one per cell, so this aggregates first and then hands
+    the result to the SAME _row_keyed_rows helper every whole-file CSV digest
+    in this module already uses, rather than inventing a second snapshot
+    shape. Twin of the same-named function in tests/test_golden_master.py;
+    must compute identically or the golden snapshot stops describing what
+    that test checks.
+    """
+    return df.groupby(list(DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY), as_index=False).agg(
+        n_rows=("seed", "size"),
+        mean_total_deferred_kwh=("total_deferred_kwh", "mean"),
+        mean_feeder_peak_to_average_ratio=("feeder_peak_to_average_ratio", "mean"),
+        mean_feeder_coefficient_of_variation=("feeder_coefficient_of_variation", "mean"),
+        mean_avg_cost_per_agent_eur=("avg_cost_per_agent_eur", "mean"),
+        mean_capacity_fire_rate=("capacity_fire_rate", "mean"),
+        mean_total_capacity_charge_eur=("total_capacity_charge_eur", "mean"),
+    )
+
 
 _REGENERATION_COMMAND = "python scripts/regenerate_golden_master.py"
 
@@ -766,6 +861,68 @@ def _compute_family_sensitivity_pins() -> dict | None:
     }
 
 
+def _compute_dose_matched_monopoly_pins() -> dict | None:
+    if not DOSE_MATCHED_MONOPOLY_CSV_PATH.is_file():
+        print(f"note: {DOSE_MATCHED_MONOPOLY_CSV_PATH} not present; skipping dose_matched_monopoly_pins.json regeneration")
+        return None
+
+    import pandas as pd
+
+    df = pd.read_csv(DOSE_MATCHED_MONOPOLY_CSV_PATH)
+    return {
+        "_comment": (
+            "Pinned digest of results/dose_matched_monopoly.csv (D11's dose-matched-"
+            "monopoly arm, Phase 18.1): every data row and every column, keyed by "
+            "(scope, arm, k, metric), plus the row count. Pinned whole rather than as a "
+            "subset: 46 rows is small enough that a claim-bearing subset would save "
+            "nothing. results/dose_matched_monopoly.csv is read-only input here and is "
+            "never written by this script; only this pinned snapshot is written. "
+            "Regenerate DELIBERATELY, never automatically, only after a verified "
+            "intentional rerun of that analysis, by running from the repository root: "
+            f"{_REGENERATION_COMMAND}"
+        ),
+        "n_rows": int(len(df)),
+        "rows": _row_keyed_rows(df, DOSE_MATCHED_MONOPOLY_IDENTITY, DOSE_MATCHED_MONOPOLY_PINNED_FIELDS),
+    }
+
+
+def _compute_dose_matched_monopoly_parquet_cell_pins() -> dict | None:
+    if not SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH.is_file():
+        print(
+            f"note: {SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH} not present; skipping "
+            "sweep_dose_matched_monopoly_parquet_cell_pins.json regeneration"
+        )
+        return None
+
+    import pandas as pd
+
+    df = pd.read_parquet(SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH)
+    grouped = _dose_matched_monopoly_parquet_cell_aggregates(df)
+    return {
+        "_comment": (
+            "Per-(k, capacity_surcharge_divisor, ablation) cell aggregates over "
+            "results/sweep_dose_matched_monopoly.parquet (D11's dose-matched-monopoly "
+            "arm, Phase 18.1): the row count (30 in every one of the 12 cells) and the "
+            "mean of total_deferred_kwh, feeder_peak_to_average_ratio, "
+            "feeder_coefficient_of_variation, avg_cost_per_agent_eur, "
+            "capacity_fire_rate and total_capacity_charge_eur, keyed by (k, "
+            "capacity_surcharge_divisor, ablation). These are claim-bearing aggregates "
+            "no CSV covers directly: docs/DECISIONS.md's 'D11 result' section quotes "
+            "the peak-to-average and deferred-volume figures straight from this "
+            "parquet, filtered the same way. "
+            "results/sweep_dose_matched_monopoly.parquet is read-only input here and is "
+            "never written by this script; only this pinned snapshot is written. "
+            "Regenerate DELIBERATELY, never automatically, only after a verified "
+            "intentional rerun of that sweep, by running from the repository root: "
+            f"{_REGENERATION_COMMAND}"
+        ),
+        "n_rows": int(len(grouped)),
+        "rows": _row_keyed_rows(
+            grouped, DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY, DOSE_MATCHED_MONOPOLY_PARQUET_CELL_FIELDS
+        ),
+    }
+
+
 def _write_golden(path: Path, payload: dict) -> None:
     with open(path, "w", encoding="ascii") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
@@ -786,6 +943,8 @@ def main() -> None:
         (EFFECT_SIZES_GOLDEN_PATH, _compute_effect_sizes_pins),
         (SUMMARY_STATS_CORRECTED_GOLDEN_PATH, _compute_summary_stats_corrected_pins),
         (FAMILY_SENSITIVITY_GOLDEN_PATH, _compute_family_sensitivity_pins),
+        (DOSE_MATCHED_MONOPOLY_GOLDEN_PATH, _compute_dose_matched_monopoly_pins),
+        (SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH, _compute_dose_matched_monopoly_parquet_cell_pins),
     ):
         payload = compute()
         if payload is not None:
