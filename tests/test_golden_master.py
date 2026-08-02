@@ -40,6 +40,19 @@ already-loaded DataFrame, which lets a shipped test point the same code at a
 deliberately perturbed in-memory copy and prove the pin bites, all without
 ever writing the CSV on disk (these CSVs are read-only sweep outputs).
 
+Three further pinned digests (items 12 to 14) close the gap left open at the
+end of Phase 17: results/effect_sizes.csv (185 rows, the file Chapter 1's own
+headline figures are drawn from) and results/summary_stats_corrected.csv (188
+rows, Section 6.10's per-comparison correction and bootstrap-CI detail) are
+each pinned WHOLE, the same way Phase 16 converted summary_stats.csv, since
+both are small enough that a claim-bearing subset would save little.
+results/family_sensitivity.csv is different: at 1227 rows, a whole-file
+digest in the same style would run to roughly 1.6 MB, so it is pinned as a
+named CLAIM-BEARING SUBSET instead (the seven family_summary rows plus one
+real per-test row), alongside the file's total row count as a shape guard
+covering the rows that subset does not otherwise look at. See
+FAMILY_SENSITIVITY_IDENTITY's comment below for the full reasoning.
+
 A column that is constant across a whole file gets pinned once, at the top
 level of that file's golden snapshot, and is then checked against every row.
 Both such columns today are metric3_sign_convention, in
@@ -93,6 +106,12 @@ DEMAND_SOURCE_GOLDEN_PATH = GOLDEN_DIR / "demand_source_comparison_pins.json"
 DEMAND_SOURCE_CSV_PATH = RESULTS_DIR / "demand_source_comparison.csv"
 MONOPOLY_GOLDEN_PATH = GOLDEN_DIR / "monopoly_comparison_pins.json"
 MONOPOLY_CSV_PATH = RESULTS_DIR / "monopoly_comparison.csv"
+EFFECT_SIZES_GOLDEN_PATH = GOLDEN_DIR / "effect_sizes_pins.json"
+EFFECT_SIZES_CSV_PATH = RESULTS_DIR / "effect_sizes.csv"
+FAMILY_SENSITIVITY_GOLDEN_PATH = GOLDEN_DIR / "family_sensitivity_pins.json"
+FAMILY_SENSITIVITY_CSV_PATH = RESULTS_DIR / "family_sensitivity.csv"
+SUMMARY_STATS_CORRECTED_GOLDEN_PATH = GOLDEN_DIR / "summary_stats_corrected_pins.json"
+SUMMARY_STATS_CORRECTED_CSV_PATH = RESULTS_DIR / "summary_stats_corrected.csv"
 SWEEP_RAW_PARQUET_PATH = RESULTS_DIR / "sweep_raw.parquet"
 SWEEP_MONOPOLY_PARQUET_PATH = RESULTS_DIR / "sweep_monopoly.parquet"
 SWEEP_OPSD_HEADLINE_PARQUET_PATH = RESULTS_DIR / "sweep_opsd_headline.parquet"
@@ -481,16 +500,401 @@ MONOPOLY_PINNED_FIELDS = {
 # silent edit to it would change the claim without changing any number.
 MONOPOLY_CONSTANT_FIELDS = ("metric3_sign_convention", "note")
 
-# The four row-keyed pinned CSVs, each with the number of p-value columns its
-# header actually carries. Pinned as a count rather than a list so that a
-# p-value column added to one of these files later cannot quietly land back on
-# the "float" kind, and so the claim that demand_source_comparison.csv has no
-# p-value column at all is checked against the real header rather than assumed.
+EFFECT_SIZES_IDENTITY = ("block", "k", "broker_count", "ablation", "metric")
+# Every non-identity column results/effect_sizes.csv carries (Chapter 1's own
+# headline figures and Section 6.1's clean-channel-isolation pnl_sanity_check
+# block both live in this file). The five identity columns plus these fifteen
+# are the whole header, so no column of this file is left unpinned.
+# (block, k, broker_count, ablation, metric) is unique over the whole file
+# because the analysis emits exactly one row per combination of those five
+# (three blocks, each swept over its own combination of k, broker_count and
+# ablation, with the "ALL" grand-total rows using the literal string "ALL"
+# for k and broker_count rather than colliding with a real level);
+# _rows_by_identity asserts that rather than assuming it.
+EFFECT_SIZES_PINNED_FIELDS = {
+    "metric_label": "str",
+    "n_seeds": "int",
+    "mean_disabled": "float",
+    "mean_ablation": "float",
+    "paired_mean_diff": "float",
+    "paired_mean_pct_change": "float",
+    "naive_pct_change_of_means": "float",
+    "paired_dz": "float",
+    "paired_p": "pvalue",
+    "cohens_d_independent": "float",
+    "degenerate_paired_diff": "bool",
+    "max_abs_paired_diff": "float",
+    "pnl_physical_leak": "str",
+    "metric3_sign_convention": "str",
+    "note": "str",
+}
+
+SUMMARY_STATS_CORRECTED_IDENTITY = ("scope", "k", "broker_count", "ablation", "metric")
+# Every non-identity column results/summary_stats_corrected.csv carries: the
+# per-comparison detail Section 6.10 promises ("one row per comparison") for
+# the multiple-comparison correction and bootstrap-CI story. The five
+# identity columns plus these twenty-eight are the whole header.
+# (scope, k, broker_count, ablation, metric) is unique over the whole file:
+# scope alone separates the 180 main-sweep rows (120 real comparisons plus the
+# 60 excluded capacity_pnl_only deterministic identities) from the 8
+# monopoly-supplement rows, and within each scope the remaining four columns
+# are exactly that scope's own grid, with no repeated cell.
+SUMMARY_STATS_CORRECTED_PINNED_FIELDS = {
+    "metric_label": "str",
+    "n_seeds": "int",
+    "paired_mean_diff": "float",
+    "paired_mean_pct_change": "float",
+    "paired_dz": "float",
+    "p_uncorrected": "pvalue",
+    "p_holm": "pvalue",
+    "p_bh": "pvalue",
+    "survives_holm_alpha05": "bool",
+    "survives_bh_alpha05": "bool",
+    "ci95_t_lo": "float",
+    "ci95_t_hi": "float",
+    "ci95_boot_lo": "float",
+    "ci95_boot_hi": "float",
+    "ci_disagreement_flag": "bool",
+    "ci_disagreement_detail": "str",
+    "ci_width_ratio": "float",
+    "degenerate": "bool",
+    "correction_family": "str",
+    "correction_family_size": "int",
+    "family_size_primary": "int",
+    "family_size_alternative": "int",
+    "family_size_monopoly_secondary": "int",
+    "bootstrap_seed": "int",
+    "n_bootstrap": "int",
+    "alpha": "float",
+    "metric3_sign_convention": "str",
+    "notes": "str",
+}
+
+# results/family_sensitivity.csv is 1227 rows, about ten times
+# structural_sensitivity.csv's 124 (the largest whole-file digest pinned so
+# far, at 177891 bytes on disk). A whole-file digest built the same way here
+# would run to roughly 1.6 MB, nearly as large as the rest of tests/golden/
+# combined, for a return that a claim-bearing subset gets far more cheaply:
+# almost every one of the 1227 rows is intermediate arithmetic feeding a
+# handful of quoted aggregates, not a number this package ever quotes on its
+# own. So this file is pinned as a CLAIM-BEARING SUBSET rather than whole,
+# plus the file's total row count as a shape guard, so a row vanishing or
+# appearing ANYWHERE in the file, including the 1219 rows this subset does
+# not otherwise look at, still fails loudly (see
+# _assert_csv_matches_claim_bearing_subset_golden below).
+#
+# The seven family_summary rows carry every number Section 6.10, Slide 13a
+# and 14, DECISIONS and qa_prep's multiple-comparison-family question quote:
+# family_size, the "72 of 72 survive" tally under both corrections at every
+# one of the seven family definitions, and the worst corrected p-value per
+# definition (4.9e-5 at N=120 up to 2.34e-4 at N=306, deliberately
+# non-monotone in family size, for the reason Section 6.10 states). The
+# eighth row, the one real per-test comparison for k=1.0/broker_count=3
+# /capacity_both on the coefficient of variation under the primary family
+# (F1), is pinned for two further reasons: it backs Section 6.2's own quoted
+# "d_z = -22.2 (p = 7.4e-41)" figure directly, and its p_holm is the specific
+# number Section 6.10 asserts "reproduces the shipped p_holm column of
+# results/summary_stats_corrected.csv exactly". It is also the only row in
+# this subset whose p-values sit far enough below CSV_PIN_ABS_TOL to prove
+# the relative-only p-value rule earns its keep on this file too: the seven
+# family_summary rows' own worst-p figures are all no smaller than about
+# 5e-6, comfortably above that floor on their own.
+FAMILY_SENSITIVITY_IDENTITY = ("family_definition", "test_id")
+FAMILY_SENSITIVITY_PINNED_FIELDS = {
+    "family_size": "int",
+    "n_families_in_definition": "int",
+    "ablation": "str",
+    "metric": "str",
+    "is_headline_72": "bool",
+    "degenerate": "bool",
+    "p_uncorrected": "pvalue",
+    "p_holm": "pvalue",
+    "p_bh": "pvalue",
+    "survives_holm_alpha05": "bool",
+    "survives_bh_alpha05": "bool",
+    "alpha": "float",
+    "n_headline_tests": "int",
+    "n_headline_surviving_holm": "int",
+    "n_headline_surviving_bh": "int",
+    "worst_headline_p_uncorrected": "pvalue",
+    "worst_headline_p_holm": "pvalue",
+    "worst_headline_p_bh": "pvalue",
+    "bonferroni_alpha_over_family_size": "float",
+    "notes": "str",
+}
+# The explicit, named claim-bearing subset described above: the seven
+# family_summary rows (one per family definition) plus the one real per-test
+# row. Must match the same-named constant in
+# scripts/regenerate_golden_master.py exactly, or the golden file stops
+# describing the selection that was deliberately made.
+FAMILY_SENSITIVITY_PINNED_ROW_KEYS = (
+    ("F1_main_sweep_primary_120", "family_summary|F1_main_sweep_primary_120"),
+    ("F2_main_sweep_with_degenerates_180", "family_summary|F2_main_sweep_with_degenerates_180"),
+    ("F3_per_metric_24", "family_summary|F3_per_metric_24"),
+    ("F4_pooled_with_monopoly", "family_summary|F4_pooled_with_monopoly"),
+    ("F5_everything_pooled", "family_summary|F5_everything_pooled"),
+    ("F6_per_cell_k_by_broker_count", "family_summary|F6_per_cell_k_by_broker_count"),
+    ("F7_everything_pooled_with_degenerates", "family_summary|F7_everything_pooled_with_degenerates"),
+    ("F1_main_sweep_primary_120", "main|k=1|bc=3|capacity_both|feeder_coefficient_of_variation"),
+)
+
+# The eight pinned rows above cover exactly eight of family_sensitivity.csv's
+# 1227 rows; the other 1219 were, until this section, guarded only by the
+# total-row-count shape guard and the exact-column-set pin, neither of which
+# would catch a single unpinned p-value shifting, a single unpinned
+# survives_holm_alpha05 flag flipping, or a single unpinned row's metric,
+# ablation or is_headline_72 label being corrupted. This closes that gap with
+# WHOLE-FILE AGGREGATE GUARDS, in three parts, computed over every row:
+#
+#   1. counts and p-value extrema on the six VALUE columns (p_uncorrected,
+#      p_holm, p_bh, survives_holm_alpha05, survives_bh_alpha05, degenerate),
+#      pinned BOTH per family_definition AND over the whole file;
+#   2. log-magnitude sums on the three p-value columns (see
+#      P_VALUE_LOG_FLOOR's comment below), also pinned at both levels,
+#      closing the blind spot part 1 leaves for a p-value that moves in the
+#      MIDDLE of the distribution;
+#   3. an exact multiset over EVERY identifier and label column the file has
+#      (see LABEL_COMBO_COLUMNS's comment below for the full list and why
+#      each one belongs there), pinned PER family_definition ONLY, not also
+#      at the overall level (see FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS's
+#      comment below for why the overall figure would be a pure duplicate).
+#      This closes a DIFFERENT blind spot from parts 1 and 2: they only ever
+#      read the six value columns, so a bug that mislabels which row a
+#      p-value belongs to (a wrong metric, a swapped ablation, a flipped
+#      is_headline_72, a mislabelled source, and so on) moves no count, no
+#      extremum and no log-sum at all, and would otherwise pass silently on
+#      any of the 1219 rows outside the eight individually pinned above. An
+#      adversarial review reproduced exactly this, three separate ways,
+#      against an earlier version of this section that had only parts 1 and
+#      2, and a follow-up review then found that the first fix for it was
+#      itself a hand-picked subset of label columns rather than all of them;
+#      it is not a hypothetical, and this file's own docs/DECISIONS.md keeps
+#      a correction section for exactly this failure mode.
+#
+# Deliberately NOT a bit-exact whole-file digest or a checksum: Phase 11's
+# structural-sensitivity work already found that a bit-exact equality check
+# on a large grid false-alarms on cross-process 1-ULP floating-point drift
+# (reproduced three ways at the time, see docs/PROGRESS.md), which is exactly
+# why every pin in this module compares by tolerance instead of by hash.
+#
+# What is and is not covered, stated precisely rather than left to be
+# inferred: row count, column set, the six value columns' counts and
+# extremes, the log-magnitude sums, and the identity-label multisets are
+# pinned across all 1227 rows. What remains unpinned is any change to an
+# unpinned row's individual p-value that preserves its family's log-sum,
+# which requires two compensating shifts in exact reciprocal proportion (for
+# example row A's p_holm multiplied by some factor while row B's is divided
+# by that same factor, holding the sum of logs fixed): a coincidence, not a
+# realistic regression, but a real and disclosed limit of a sum rather than a
+# per-row pin, and stated here rather than left for the aggregate to imply
+# more than it delivers.
+#
+# Counts and min/max alone still have a blind spot: a p-value that moves in
+# the MIDDLE of the distribution (neither the smallest nor the largest, and
+# not crossing the alpha=0.05 survives_holm_alpha05/survives_bh_alpha05
+# boundary) flips no flag, sets no new min, sets no new max, and would pass
+# every guard above. That is precisely the regression class this file exists
+# to catch, since its whole job is recomputing Holm and BH under seven family
+# definitions. sum_log10_p_uncorrected / sum_log10_p_holm / sum_log10_p_bh
+# close that: the sum of log10(p) over a group's rows is sensitive to a
+# relative change in ANY one p, at ANY magnitude, which is exactly the
+# property min and max lack (one p moving from 1e-30 to 1e-25 shifts the
+# log-sum by 5, enormous against a relative tolerance, while leaving every
+# count and every extremum in this dict untouched). A plain sum of the p
+# values themselves would not do this: it is dominated by the handful of
+# large (near-1) p's in any group and is numerically blind to a tiny p moving
+# by many orders of magnitude, which is the exact failure mode being closed.
+#
+# log10(0.0) is undefined and a p-value of exactly 0.0 does occur in this
+# codebase's p-value machinery (see
+# test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals's
+# "exact zero" case), so every p is floored at P_VALUE_LOG_FLOOR before its
+# log is taken. 1e-300 was chosen deliberately: it sits comfortably above
+# float64's smallest normal number (about 2.2e-308) and smallest denormal
+# (about 4.9e-324), so the floor itself is never close to a numerical edge,
+# and it sits about 244 orders of magnitude below the smallest real p-value
+# in results/family_sensitivity.csv today (about 8.9e-56), so no row is
+# actually floored by it now. The cost is explicit and pinned, not hidden:
+# any real p at or under the floor is compressed to log10(P_VALUE_LOG_FLOOR)
+# exactly, so the log-sum can no longer distinguish how far under the floor
+# such a p went; n_at_floor_p_uncorrected / n_at_floor_p_holm / n_at_floor_p_bh
+# pin how many rows hit it (0 everywhere today), so a regression that pushes
+# more rows to zero or below the floor is itself visible as a changed count,
+# rather than silently absorbed into the sum.
+P_VALUE_LOG_FLOOR = 1e-300
+
+
+def _log10_with_floor(value: float) -> float:
+    return math.log10(value) if value > P_VALUE_LOG_FLOOR else math.log10(P_VALUE_LOG_FLOOR)
+
+
+FAMILY_SENSITIVITY_AGGREGATE_FIELDS = {
+    "n_rows": "int",
+    "n_survives_holm_true": "int",
+    "n_survives_holm_false": "int",
+    "n_survives_bh_true": "int",
+    "n_survives_bh_false": "int",
+    "n_degenerate_true": "int",
+    "p_uncorrected_min": "pvalue",
+    "p_uncorrected_max": "pvalue",
+    "p_holm_min": "pvalue",
+    "p_holm_max": "pvalue",
+    "p_bh_min": "pvalue",
+    "p_bh_max": "pvalue",
+    "n_rows_contributing": "int",
+    "sum_log10_p_uncorrected": "logsum",
+    "sum_log10_p_holm": "logsum",
+    "sum_log10_p_bh": "logsum",
+    "n_at_floor_p_uncorrected": "int",
+    "n_at_floor_p_holm": "int",
+    "n_at_floor_p_bh": "int",
+}
+# The whole-file aggregate carries two further fields the per-family-
+# definition breakdown does not: how many distinct family_definition and
+# test_id values the WHOLE file holds, so a family_definition silently
+# renamed, or a test_id silently duplicated anywhere in the file (not just
+# within one family definition's own rows), still fails here.
+FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS = dict(
+    FAMILY_SENSITIVITY_AGGREGATE_FIELDS,
+    n_distinct_family_definitions="int",
+    n_distinct_test_ids="int",
+)
+# The label multiset itself (see LABEL_COMBO_COLUMNS below) is pinned PER
+# family_definition ONLY, not at the overall level too, unlike every other
+# field above. Reason, not a size shortcut: with test_id in the combination,
+# every row's combination is already unique within its own family_definition
+# (each family_definition's own test_id values never repeat), so the overall
+# multiset would hold the exact same 1227 entries the seven per-family dicts
+# already hold between them, just merged into one dict, which is the OVERALL
+# figure summing the per-family ones (1227 total combinations either way).
+# Storing that sum a second time at the overall level is a pure duplicate: it
+# carries strictly less information than the per-family breakdown, since it
+# cannot say WHICH family_definition a mislabel landed in, only that
+# something moved, and the per-family breakdown is what makes this pin
+# diagnostic rather than merely a tripwire. Every one of the label-multiset
+# bite tests below still fails via the per-family_definition check alone;
+# none of them relied on an overall-level label check.
+
+# Columns whose per-row VALUE this pin protects by counting how often each
+# combination occurs, per family_definition and over the whole file, closing
+# the gap the value-column aggregates above cannot: they never read these
+# columns at all, so a mislabel on any of them moves nothing above.
+#
+# The rule is simple rather than a hand-picked subset, because a hand-picked
+# subset is exactly the wrong shape here: EVERY column of
+# results/family_sensitivity.csv that is an identifier or a label, rather
+# than a computed statistical output, is included. That is family_key, scope,
+# source, k, broker_count, ablation, cell_is_stamped_not_native, metric,
+# test_id and is_headline_72; every other column (family_size,
+# n_families_in_definition, degenerate, p_uncorrected, p_holm, p_bh,
+# survives_holm_alpha05, survives_bh_alpha05, alpha, n_headline_tests,
+# n_headline_surviving_holm, n_headline_surviving_bh,
+# worst_headline_p_uncorrected, worst_headline_p_holm, worst_headline_p_bh,
+# bonferroni_alpha_over_family_size, notes) is either a computed statistic
+# already covered above (degenerate and the three p-value columns, via the
+# counts/extremes/log-sums), a family_summary-only aggregate already covered
+# by the claim-bearing subset's own pinned fields (n_headline_tests and its
+# neighbours), a constant setting (alpha), free text (notes), or itself the
+# grouping key (family_definition; a row's family_definition changing to
+# another EXISTING family_definition already shows up as a changed n_rows on
+# both the losing and the gaining group, so it needs no separate label
+# check). None of the ten included columns turned out, on inspection, to be
+# a computed output masquerading as a label; all ten are genuine identifiers
+# or labels (verified: none is constant, all vary per row where the
+# underlying design varies, k and broker_count and ablation and metric and
+# is_headline_72 are the sweep's own design coordinates, family_key/scope/
+# source/cell_is_stamped_not_native are provenance labels, and test_id is the
+# row's own name).
+#
+# Including test_id pushes this multiset close to one entry per row (313
+# distinct values across 1227 rows): that is deliberate, not an accident to
+# be trimmed back. With test_id included, the multiset becomes a complete
+# row-identity pin on every label column, with the six value columns already
+# pinned in aggregate (counts and extremes) and by log-sum, so the combined
+# rule an examiner can check in one sentence is: every label is pinned
+# exactly, every value column is pinned in aggregate, and the only remaining
+# gap is a value change that exactly preserves its family's log-sum (see the
+# module docstring's own statement of that residual limit).
+#
+# This multiset is computed and pinned PER family_definition ONLY, not also
+# at the overall (whole-file) level; see the comment above
+# FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS for why (the overall figure
+# would be the identical 1227 entries a second time, derivable by summing the
+# seven per-family dicts, and strictly less diagnostic than they are since it
+# cannot say which family a mislabel landed in).
+LABEL_COMBO_COLUMNS = (
+    "family_key",
+    "scope",
+    "source",
+    "k",
+    "broker_count",
+    "ablation",
+    "cell_is_stamped_not_native",
+    "metric",
+    "test_id",
+    "is_headline_72",
+)
+
+
+def _label_combo_key(row) -> str:
+    """One canonical, collision-free string key for a row's combination of
+    LABEL_COMBO_COLUMNS values. Reuses _identity_token so a missing value
+    (metric/ablation/is_headline_72 on a family_summary row) collapses to the
+    same _MISSING_TOKEN used everywhere else in this module, rather than a
+    third, ad hoc representation of "empty".
+    """
+    return "|".join(f"{column}={_identity_token(row[column])}" for column in LABEL_COMBO_COLUMNS)
+
+
+def _label_combo_counts(group) -> dict:
+    """value_counts over LABEL_COMBO_COLUMNS, as a plain dict: key -> count.
+
+    Twin of the same-named function in scripts/regenerate_golden_master.py;
+    must compute identically or the golden snapshot stops describing what
+    this checks. An exact dict of ints, not a tolerance-based comparison:
+    there is no floating-point noise in a row count, so nothing is gained by
+    loosening it, and pytest.approx would not even apply to a dict.
+    """
+    counts: dict = {}
+    for _, row in group.iterrows():
+        key = _label_combo_key(row)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _assert_label_counts_match_golden(actual_counts: dict, expected_counts: dict, context: str) -> None:
+    if actual_counts == expected_counts:
+        return
+    added = sorted(set(actual_counts) - set(expected_counts))
+    removed = sorted(set(expected_counts) - set(actual_counts))
+    changed = {
+        key: {"expected": expected_counts[key], "actual": actual_counts[key]}
+        for key in sorted(set(actual_counts) & set(expected_counts))
+        if actual_counts[key] != expected_counts[key]
+    }
+    raise AssertionError(
+        f"{context}: label combination counts changed (added={added}, removed={removed}, changed={changed})"
+    )
+
+
+# The row-keyed pinned CSVs that are pinned WHOLE, each with the number of
+# p-value columns its header actually carries. Pinned as a count rather than a
+# list so that a p-value column added to one of these files later cannot
+# quietly land back on the "float" kind, and so the claim that
+# demand_source_comparison.csv has no p-value column at all is checked against
+# the real header rather than assumed. results/family_sensitivity.csv is
+# deliberately NOT in this list: it is pinned as a claim-bearing SUBSET (see
+# FAMILY_SENSITIVITY_IDENTITY's comment above), so its real per-test p-value
+# columns (p_uncorrected, p_holm, p_bh) are not all individually value-pinned,
+# and folding it into this shared, whole-header check would require pretending
+# otherwise.
 PINNED_CSV_SPECS = (
     ("results/summary_stats.csv", SUMMARY_STATS_CSV_PATH, SUMMARY_STATS_PINNED_FIELDS, 1),
     ("results/structural_sensitivity.csv", STRUCTURAL_SENSITIVITY_CSV_PATH, STRUCTURAL_SENSITIVITY_PINNED_FIELDS, 3),
     ("results/demand_source_comparison.csv", DEMAND_SOURCE_CSV_PATH, DEMAND_SOURCE_PINNED_FIELDS, 0),
     ("results/monopoly_comparison.csv", MONOPOLY_CSV_PATH, MONOPOLY_PINNED_FIELDS, 2),
+    ("results/effect_sizes.csv", EFFECT_SIZES_CSV_PATH, EFFECT_SIZES_PINNED_FIELDS, 1),
+    ("results/summary_stats_corrected.csv", SUMMARY_STATS_CORRECTED_CSV_PATH, SUMMARY_STATS_CORRECTED_PINNED_FIELDS, 3),
 )
 
 
@@ -597,7 +1001,15 @@ def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, contex
     assert actual is not None, f"{context}: {field} expected {expected!r}, found empty"
     if kind == "float":
         assert float(actual) == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), f"{context}: {field}"
-    elif kind == "pvalue":
+    elif kind in ("pvalue", "logsum"):
+        # "logsum" (a sum of log10(p) over a group of rows, possibly large and
+        # negative) wants the exact same rule as "pvalue": relative tolerance
+        # only, abs=0, with the same zero-special-case. _assert_pvalue_close's
+        # own zero handling is unreachable here in practice (a log-sum is a
+        # sum of many negative terms, not a single p-value, so it is never
+        # exactly 0.0 for real data), but reusing the one helper rather than
+        # writing a second is deliberate: the tolerance RULE is identical, only
+        # the quantity it is applied to differs.
         _assert_pvalue_close(float(actual), expected, f"{context}: {field}")
     elif kind == "int":
         assert int(actual) == expected, f"{context}: {field}"
@@ -696,6 +1108,181 @@ def _assert_monopoly_comparison_matches_golden(df, golden: dict) -> None:
         df, golden, MONOPOLY_IDENTITY, MONOPOLY_PINNED_FIELDS, label, MONOPOLY_GOLDEN_PATH.name
     )
     _assert_constant_fields(df, golden, MONOPOLY_CONSTANT_FIELDS, label)
+
+
+def _assert_effect_sizes_matches_golden(df, golden: dict) -> None:
+    _assert_csv_matches_row_keyed_golden(
+        df, golden, EFFECT_SIZES_IDENTITY, EFFECT_SIZES_PINNED_FIELDS,
+        "results/effect_sizes.csv", EFFECT_SIZES_GOLDEN_PATH.name,
+    )
+
+
+def _assert_summary_stats_corrected_matches_golden(df, golden: dict) -> None:
+    _assert_csv_matches_row_keyed_golden(
+        df, golden, SUMMARY_STATS_CORRECTED_IDENTITY, SUMMARY_STATS_CORRECTED_PINNED_FIELDS,
+        "results/summary_stats_corrected.csv", SUMMARY_STATS_CORRECTED_GOLDEN_PATH.name,
+    )
+
+
+def _rows_by_identity_subset(df, identity_columns, wanted_keys) -> dict:
+    """Twin of _rows_by_identity, restricted to a named subset of identity keys.
+
+    Used for a CSV whose identity key legitimately repeats across rows this
+    pin does not cover (family_sensitivity.csv's test_id repeats once per
+    family_definition, since the same underlying test is pooled into several
+    family definitions), so asserting no duplicates over the WHOLE file, the
+    way _rows_by_identity does, would fail for a reason that has nothing to do
+    with the rows actually being pinned. Duplicate detection still applies,
+    just scoped to the keys this call was asked to look for.
+    """
+    rows = {}
+    for _, row in df.iterrows():
+        key = _identity_key(row, identity_columns)
+        if key not in wanted_keys:
+            continue
+        assert key not in rows, f"duplicate identity key among the pinned subset: {key}"
+        rows[key] = row
+    return rows
+
+
+def _assert_csv_matches_claim_bearing_subset_golden(
+    df, golden: dict, identity_columns, pinned_fields, label: str, golden_label: str
+) -> None:
+    """Compare a CSV against a golden snapshot of a CLAIM-BEARING SUBSET of its rows.
+
+    For a CSV too large to pin whole without absurdity (see
+    FAMILY_SENSITIVITY_IDENTITY's comment above for the concrete reasoning),
+    this pins the file's total row count as a shape guard, so a row vanishing
+    or appearing ANYWHERE in the file still fails here even though most of the
+    file is not individually value-checked, plus the named subset of rows that
+    actually carry a claim, looked up by identity exactly as
+    _assert_csv_matches_row_keyed_golden does for a whole-file digest. Written
+    generically over identity columns and pinned fields (both parameters, not
+    hardcoded), so a future large CSV needing the same treatment (see the
+    Phase 18.1 follow-up note in PROGRESS.md) can call this directly rather
+    than copying it.
+    """
+    assert len(df) == golden["n_total_rows"], (
+        f"{label}: total row count changed ({len(df)} rows, pinned {golden['n_total_rows']})"
+    )
+    assert len(golden["rows"]) == golden["n_rows"], f"{golden_label}: golden file is internally inconsistent"
+
+    golden_keys = set()
+    for expected_row in golden["rows"]:
+        key = _identity_key(expected_row, identity_columns)
+        assert key not in golden_keys, f"{golden_label}: duplicate identity key in the golden file: {key}"
+        golden_keys.add(key)
+    assert len(golden_keys) == golden["n_rows"], (
+        f"{golden_label}: golden file holds {len(golden_keys)} distinct identity keys, pinned {golden['n_rows']} rows"
+    )
+
+    actual_rows = _rows_by_identity_subset(df, identity_columns, golden_keys)
+    for expected_row in golden["rows"]:
+        key = _identity_key(expected_row, identity_columns)
+        assert key in actual_rows, f"{label}: missing pinned row for {key}"
+        actual_row = actual_rows[key]
+        context = f"{label} {key}"
+        for field, kind in pinned_fields.items():
+            _assert_pinned_field(actual_row, expected_row, field, kind, context)
+
+
+def _family_sensitivity_aggregate_row(group) -> dict:
+    """Whole-group counts, p-value extrema, and log-magnitude sums, over
+    EVERY row in the group, not just the eight individually pinned above.
+    Twin of the same-named function in scripts/regenerate_golden_master.py;
+    must compute identically or the golden snapshot stops describing what
+    this checks.
+
+    survives_holm_alpha05, survives_bh_alpha05 and degenerate are all empty on
+    the family_summary rows (see the null counts in the module's own
+    exploration), so .eq(True) / .eq(False) on those rows both correctly
+    return False rather than raising, and the two counts do not have to sum to
+    the group's row count; the difference is exactly the group's summary rows.
+    p_uncorrected/p_holm/p_bh are likewise empty only on those same rows
+    (verified identical across all three columns), and pandas' min/max skip
+    missing values by construction, so no special casing is needed for that
+    either; n_rows_contributing (one shared count, not one per column, since
+    the three columns are empty on exactly the same rows) makes that
+    explicit rather than leaving a reader to infer it from n_rows.
+    """
+    p_columns = ("p_uncorrected", "p_holm", "p_bh")
+    row = {
+        "n_rows": int(len(group)),
+        "n_survives_holm_true": int(group["survives_holm_alpha05"].eq(True).sum()),
+        "n_survives_holm_false": int(group["survives_holm_alpha05"].eq(False).sum()),
+        "n_survives_bh_true": int(group["survives_bh_alpha05"].eq(True).sum()),
+        "n_survives_bh_false": int(group["survives_bh_alpha05"].eq(False).sum()),
+        "n_degenerate_true": int(group["degenerate"].eq(True).sum()),
+        "p_uncorrected_min": float(group["p_uncorrected"].min()),
+        "p_uncorrected_max": float(group["p_uncorrected"].max()),
+        "p_holm_min": float(group["p_holm"].min()),
+        "p_holm_max": float(group["p_holm"].max()),
+        "p_bh_min": float(group["p_bh"].min()),
+        "p_bh_max": float(group["p_bh"].max()),
+        "n_rows_contributing": int(group["p_uncorrected"].notna().sum()),
+    }
+    for column in p_columns:
+        values = group[column].dropna()
+        row[f"sum_log10_{column}"] = float(sum(_log10_with_floor(float(value)) for value in values))
+        row[f"n_at_floor_{column}"] = int((values <= P_VALUE_LOG_FLOOR).sum())
+    row["label_counts"] = _label_combo_counts(group)
+    return row
+
+
+def _assert_family_sensitivity_aggregates_match_golden(df, golden: dict) -> None:
+    """Whole-file aggregate guard over all 1227 rows (see
+    LABEL_COMBO_COLUMNS's comment above for exactly what is and is not
+    covered): counts and p-value extrema on the six value columns and the
+    log-magnitude sums, at BOTH the overall level and per family_definition;
+    the identity-adjacent label multiset, PER family_definition ONLY (see
+    FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS's comment above for why the
+    overall level would be a pure duplicate of the per-family breakdown). A
+    regression anywhere outside the eight individually pinned rows still
+    fails here even though it is not itself value-pinned.
+    """
+    label = "results/family_sensitivity.csv aggregates"
+    aggregates = golden["aggregates"]
+
+    overall_actual = _family_sensitivity_aggregate_row(df)
+    overall_actual["n_distinct_family_definitions"] = int(df["family_definition"].nunique())
+    overall_actual["n_distinct_test_ids"] = int(df["test_id"].nunique())
+    for field, kind in FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS.items():
+        _assert_pinned_field(overall_actual, aggregates["overall"], field, kind, f"{label}: overall")
+    # No overall-level label_counts check: deliberately not stored (see the
+    # comment above FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS). The
+    # per-family_definition check below is where every label-multiset
+    # regression is actually caught.
+
+    expected_by_family = aggregates["by_family_definition"]
+    assert set(df["family_definition"].unique()) == set(expected_by_family.keys()), (
+        f"{label}: set of family_definition values changed"
+    )
+    for family_definition, expected_group in expected_by_family.items():
+        group = df[df["family_definition"] == family_definition]
+        actual_group = _family_sensitivity_aggregate_row(group)
+        context = f"{label}: {family_definition}"
+        for field, kind in FAMILY_SENSITIVITY_AGGREGATE_FIELDS.items():
+            _assert_pinned_field(actual_group, expected_group, field, kind, context)
+        _assert_label_counts_match_golden(actual_group["label_counts"], expected_group["label_counts"], context)
+
+
+def _assert_family_sensitivity_matches_golden(df, golden: dict) -> None:
+    # Guards the SELECTION itself, not just its internal consistency: a
+    # regenerate-script bug that quietly pinned the wrong eight rows would
+    # still produce a golden file that passes every check inside
+    # _assert_csv_matches_claim_bearing_subset_golden, since that helper only
+    # checks the golden file against itself and then against whatever rows it
+    # names. Comparing against the named constant catches that class of bug.
+    actual_keys = {_identity_key(row, FAMILY_SENSITIVITY_IDENTITY) for row in golden["rows"]}
+    assert actual_keys == set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS), (
+        "results/family_sensitivity.csv: the golden file's pinned rows do not match "
+        "FAMILY_SENSITIVITY_PINNED_ROW_KEYS"
+    )
+    _assert_csv_matches_claim_bearing_subset_golden(
+        df, golden, FAMILY_SENSITIVITY_IDENTITY, FAMILY_SENSITIVITY_PINNED_FIELDS,
+        "results/family_sensitivity.csv", FAMILY_SENSITIVITY_GOLDEN_PATH.name,
+    )
+    _assert_family_sensitivity_aggregates_match_golden(df, golden)
 
 
 def _sha256(path: Path) -> str:
@@ -1851,6 +2438,776 @@ def test_sweep_opsd_headline_parquet_pins_deferred_energy():
 
 
 # ---------------------------------------------------------------------------
+# 12. Pinned digest of results/effect_sizes.csv, every data row and every
+#     column: the file Chapter 1's headline figures are drawn from, and the
+#     per-cell effect sizes behind Sections 6.1 to 6.9 (the metric3_mechanism
+#     and other_metrics blocks) plus the clean-channel-isolation sanity check
+#     (the pnl_sanity_check block). Pinned WHOLE, the same way Phase 16
+#     converted summary_stats.csv: 185 rows is small enough that a
+#     claim-bearing subset would save little and would risk missing a row
+#     nobody thought to name in advance. Read-only, and skips (does not fail)
+#     if the analysis output is absent on this machine, exactly as items 5
+#     to 8 above.
+# ---------------------------------------------------------------------------
+
+
+def test_effect_sizes_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(EFFECT_SIZES_CSV_PATH, EFFECT_SIZES_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(EFFECT_SIZES_GOLDEN_PATH)
+    df = pd.read_csv(EFFECT_SIZES_CSV_PATH)
+    _assert_effect_sizes_matches_golden(df, golden)
+
+
+def test_effect_sizes_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Four regressions specific to this file: the sign of a metric-3 percent
+    change flipping (a reported improvement becomes a reported worsening at
+    the same magnitude, which is exactly the kind of regression the sign
+    convention pinned alongside it exists to catch), a mean drifting by 1
+    percent (a plausible calibration or rounding regression, too small to
+    notice by eye), the pnl_sanity_check block's degenerate_paired_diff flag
+    flipping (qa_prep A3 points a reader directly at this column carrying
+    this value as the evidence for clean channel isolation), and a row
+    disappearing. The CSV's own digest is captured before and re-checked
+    after, so the file on disk is provably untouched.
+    """
+    _skip_unless_pinned_csv_available(EFFECT_SIZES_CSV_PATH, EFFECT_SIZES_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(EFFECT_SIZES_CSV_PATH)
+    golden = _load_golden(EFFECT_SIZES_GOLDEN_PATH)
+    df = pd.read_csv(EFFECT_SIZES_CSV_PATH)
+
+    _assert_effect_sizes_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) a metric-3 percent change's sign flips: a reported improvement
+    #     becomes a reported worsening at the same magnitude.
+    flipped = df.copy(deep=True)
+    metric3_rows = flipped.index[
+        (flipped["block"] == "metric3_mechanism") & (flipped["paired_mean_pct_change"].abs() > 1e-6)
+    ]
+    assert len(metric3_rows) > 0, "expected at least one non-degenerate metric3_mechanism row"
+    row = metric3_rows[0]
+    flipped.loc[row, "paired_mean_pct_change"] = -flipped.loc[row, "paired_mean_pct_change"]
+    with pytest.raises(AssertionError):
+        _assert_effect_sizes_matches_golden(flipped, golden)
+
+    # (b) a mean drifts by 1 percent, small enough to pass a casual eyeball check.
+    drifted = df.copy(deep=True)
+    nonzero_mean = drifted.index[drifted["mean_ablation"].abs() > 1e-6]
+    assert len(nonzero_mean) > 0
+    row = nonzero_mean[0]
+    drifted.loc[row, "mean_ablation"] = drifted.loc[row, "mean_ablation"] * 1.01
+    with pytest.raises(AssertionError):
+        _assert_effect_sizes_matches_golden(drifted, golden)
+
+    # (c) the pnl_sanity_check block's degenerate_paired_diff flips; qa_prep
+    #     A3 points a reader directly at this column carrying this value.
+    undegenerate = df.copy(deep=True)
+    degenerate_rows = undegenerate.index[
+        (undegenerate["block"] == "pnl_sanity_check") & (undegenerate["degenerate_paired_diff"].eq(True))
+    ]
+    assert len(degenerate_rows) > 0, "expected the pnl_sanity_check block to be degenerate"
+    undegenerate.loc[degenerate_rows[0], "degenerate_paired_diff"] = False
+    with pytest.raises(AssertionError):
+        _assert_effect_sizes_matches_golden(undegenerate, golden)
+
+    # (d) a row disappears.
+    dropped = df.drop(index=df.index[-1])
+    with pytest.raises(AssertionError):
+        _assert_effect_sizes_matches_golden(dropped, golden)
+
+    assert _sha256(EFFECT_SIZES_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_effect_sizes_pin_bites_on_a_p_value_magnitude_shift():
+    """A p-value moving far in magnitude while staying far below the old
+    absolute floor: under the previous rel=1e-9/abs=1e-9 comparison (either
+    tolerance sufficing) this exact perturbation PASSED, because both values
+    sit under the absolute floor. The assertion inside reproduces that old
+    rule and shows it calling the two values equal, immediately before the
+    current rule rejects them.
+    """
+    _skip_unless_pinned_csv_available(EFFECT_SIZES_CSV_PATH, EFFECT_SIZES_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(EFFECT_SIZES_CSV_PATH)
+    golden = _load_golden(EFFECT_SIZES_GOLDEN_PATH)
+    df = pd.read_csv(EFFECT_SIZES_CSV_PATH)
+
+    _assert_effect_sizes_matches_golden(df, golden)  # unperturbed: passes
+
+    moved = df.copy(deep=True)
+    smallest = moved["paired_p"].idxmin()
+    original = float(moved.loc[smallest, "paired_p"])
+    assert original < 1e-30, "expected a real p-value far below the old absolute floor"
+    perturbed_to = 1e-20
+    assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+        f"the old rule really did call {original!r} and {perturbed_to!r} equal"
+    )
+    moved.loc[smallest, "paired_p"] = perturbed_to
+    with pytest.raises(AssertionError):
+        _assert_effect_sizes_matches_golden(moved, golden)
+
+    assert _sha256(EFFECT_SIZES_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+EFFECT_SIZES_COLUMNS = (
+    "block",
+    "k",
+    "broker_count",
+    "ablation",
+    "metric",
+    "metric_label",
+    "n_seeds",
+    "mean_disabled",
+    "mean_ablation",
+    "paired_mean_diff",
+    "paired_mean_pct_change",
+    "naive_pct_change_of_means",
+    "paired_dz",
+    "paired_p",
+    "cohens_d_independent",
+    "degenerate_paired_diff",
+    "max_abs_paired_diff",
+    "pnl_physical_leak",
+    "metric3_sign_convention",
+    "note",
+)
+
+
+def test_effect_sizes_csv_column_set_matches_pinned():
+    _skip_unless_results_artifact_available(EFFECT_SIZES_CSV_PATH)
+    import pandas as pd
+
+    header = pd.read_csv(EFFECT_SIZES_CSV_PATH, nrows=0).columns
+    _assert_exact_column_set(header, EFFECT_SIZES_COLUMNS, "results/effect_sizes.csv")
+
+
+def test_effect_sizes_csv_column_set_pin_bites_on_growth_and_shrinkage():
+    _skip_unless_results_artifact_available(EFFECT_SIZES_CSV_PATH)
+    import pandas as pd
+
+    header = list(pd.read_csv(EFFECT_SIZES_CSV_PATH, nrows=0).columns)
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(header + ["a_new_column"], EFFECT_SIZES_COLUMNS, "results/effect_sizes.csv")
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(header[:-1], EFFECT_SIZES_COLUMNS, "results/effect_sizes.csv")
+
+
+# ---------------------------------------------------------------------------
+# 13. Pinned digest of results/summary_stats_corrected.csv, every data row and
+#     every column: the per-comparison, "one row per comparison" detail
+#     Section 6.10 promises for the multiple-comparison correction and
+#     bootstrap-confidence-interval story. Pinned WHOLE (188 rows, the same
+#     scale as summary_stats.csv's 240). Read-only, skip-if-absent, same as
+#     item 12 above.
+# ---------------------------------------------------------------------------
+
+
+def test_summary_stats_corrected_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(SUMMARY_STATS_CORRECTED_CSV_PATH, SUMMARY_STATS_CORRECTED_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(SUMMARY_STATS_CORRECTED_GOLDEN_PATH)
+    df = pd.read_csv(SUMMARY_STATS_CORRECTED_CSV_PATH)
+    _assert_summary_stats_corrected_matches_golden(df, golden)
+
+
+def test_summary_stats_corrected_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Four regressions specific to this file: a t-based confidence interval
+    reported low-for-high (mirrors summary_stats.csv's own such bite), a
+    Holm-survival flag flipping on one of the 72 headline comparisons Section
+    6.10 says all survive, a confidence-interval disagreement appearing on a
+    row currently flagged as agreeing (Section 6.10's own claim is "6 of 188
+    rows are flagged", so a seventh appearing unannounced is exactly the
+    failure mode this pin exists to catch), and a row disappearing.
+    """
+    _skip_unless_pinned_csv_available(SUMMARY_STATS_CORRECTED_CSV_PATH, SUMMARY_STATS_CORRECTED_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(SUMMARY_STATS_CORRECTED_CSV_PATH)
+    golden = _load_golden(SUMMARY_STATS_CORRECTED_GOLDEN_PATH)
+    df = pd.read_csv(SUMMARY_STATS_CORRECTED_CSV_PATH)
+
+    _assert_summary_stats_corrected_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) a t-based confidence interval reported low-for-high.
+    inverted = df.copy(deep=True)
+    wide = inverted.index[(inverted["ci95_t_hi"] - inverted["ci95_t_lo"]).abs() > 1e-6]
+    assert len(wide) > 0, "expected at least one row with a non-degenerate confidence interval"
+    row = wide[0]
+    inverted.loc[row, ["ci95_t_lo", "ci95_t_hi"]] = [inverted.loc[row, "ci95_t_hi"], inverted.loc[row, "ci95_t_lo"]]
+    with pytest.raises(AssertionError):
+        _assert_summary_stats_corrected_matches_golden(inverted, golden)
+
+    # (b) a Holm survival flag flips on one of the 72 headline comparisons
+    #     Section 6.10 says all survive.
+    flipped = df.copy(deep=True)
+    surviving = flipped.index[flipped["survives_holm_alpha05"].eq(True)]
+    assert len(surviving) > 0, "expected at least one row surviving Holm correction"
+    flipped.loc[surviving[0], "survives_holm_alpha05"] = False
+    with pytest.raises(AssertionError):
+        _assert_summary_stats_corrected_matches_golden(flipped, golden)
+
+    # (c) a confidence-interval disagreement appears and goes unannounced.
+    disagreeing = df.copy(deep=True)
+    agreeing = disagreeing.index[disagreeing["ci_disagreement_flag"].eq(False)]
+    assert len(agreeing) > 0, "expected most rows to have the t and bootstrap intervals agree"
+    disagreeing.loc[agreeing[0], "ci_disagreement_flag"] = True
+    with pytest.raises(AssertionError):
+        _assert_summary_stats_corrected_matches_golden(disagreeing, golden)
+
+    # (d) a row disappears.
+    dropped = df.drop(index=df.index[-1])
+    with pytest.raises(AssertionError):
+        _assert_summary_stats_corrected_matches_golden(dropped, golden)
+
+    assert _sha256(SUMMARY_STATS_CORRECTED_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_summary_stats_corrected_pin_bites_on_a_p_value_magnitude_shift():
+    """A p-value moving 30-plus orders of magnitude, staying far below the
+    old absolute floor, on all three of this file's p-value columns.
+    """
+    _skip_unless_pinned_csv_available(SUMMARY_STATS_CORRECTED_CSV_PATH, SUMMARY_STATS_CORRECTED_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(SUMMARY_STATS_CORRECTED_CSV_PATH)
+    golden = _load_golden(SUMMARY_STATS_CORRECTED_GOLDEN_PATH)
+    df = pd.read_csv(SUMMARY_STATS_CORRECTED_CSV_PATH)
+
+    _assert_summary_stats_corrected_matches_golden(df, golden)  # unperturbed: passes
+
+    perturbed_to = 1e-20
+    for column in ("p_uncorrected", "p_holm", "p_bh"):
+        moved = df.copy(deep=True)
+        row = moved[column].idxmin()
+        original = float(moved.loc[row, column])
+        assert original < 1e-30, f"{column}: expected a real p-value far below the old absolute floor"
+        assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+            f"{column}: the old rule really did call {original!r} and {perturbed_to!r} equal"
+        )
+        moved.loc[row, column] = perturbed_to
+        with pytest.raises(AssertionError):
+            _assert_summary_stats_corrected_matches_golden(moved, golden)
+
+    assert _sha256(SUMMARY_STATS_CORRECTED_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+SUMMARY_STATS_CORRECTED_COLUMNS = (
+    "scope",
+    "k",
+    "broker_count",
+    "ablation",
+    "metric",
+    "metric_label",
+    "n_seeds",
+    "paired_mean_diff",
+    "paired_mean_pct_change",
+    "paired_dz",
+    "p_uncorrected",
+    "p_holm",
+    "p_bh",
+    "survives_holm_alpha05",
+    "survives_bh_alpha05",
+    "ci95_t_lo",
+    "ci95_t_hi",
+    "ci95_boot_lo",
+    "ci95_boot_hi",
+    "ci_disagreement_flag",
+    "ci_disagreement_detail",
+    "ci_width_ratio",
+    "degenerate",
+    "correction_family",
+    "correction_family_size",
+    "family_size_primary",
+    "family_size_alternative",
+    "family_size_monopoly_secondary",
+    "bootstrap_seed",
+    "n_bootstrap",
+    "alpha",
+    "metric3_sign_convention",
+    "notes",
+)
+
+
+def test_summary_stats_corrected_csv_column_set_matches_pinned():
+    _skip_unless_results_artifact_available(SUMMARY_STATS_CORRECTED_CSV_PATH)
+    import pandas as pd
+
+    header = pd.read_csv(SUMMARY_STATS_CORRECTED_CSV_PATH, nrows=0).columns
+    _assert_exact_column_set(header, SUMMARY_STATS_CORRECTED_COLUMNS, "results/summary_stats_corrected.csv")
+
+
+def test_summary_stats_corrected_csv_column_set_pin_bites_on_growth_and_shrinkage():
+    _skip_unless_results_artifact_available(SUMMARY_STATS_CORRECTED_CSV_PATH)
+    import pandas as pd
+
+    header = list(pd.read_csv(SUMMARY_STATS_CORRECTED_CSV_PATH, nrows=0).columns)
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(
+            header + ["a_new_column"], SUMMARY_STATS_CORRECTED_COLUMNS, "results/summary_stats_corrected.csv"
+        )
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(header[:-1], SUMMARY_STATS_CORRECTED_COLUMNS, "results/summary_stats_corrected.csv")
+
+
+# ---------------------------------------------------------------------------
+# 14. Pinned digest of results/family_sensitivity.csv: a CLAIM-BEARING SUBSET
+#     rather than every row (see FAMILY_SENSITIVITY_IDENTITY's comment above
+#     for why), plus the file's total row count as a shape guard covering the
+#     rows this subset does not otherwise look at. Read-only, skip-if-absent,
+#     same as items 12 and 13 above.
+# ---------------------------------------------------------------------------
+
+
+def test_family_sensitivity_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+    _assert_family_sensitivity_matches_golden(df, golden)
+
+
+def test_family_sensitivity_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Three regressions: the "72 of 72 survive" tally dropping by one on a
+    family_summary row (the central claim this file backs), a family size
+    off by one (mirrors monopoly_comparison.csv's own seed-count-off-by-one
+    bite), and a row disappearing ELSEWHERE in the file, outside the eight
+    pinned rows, which no identity lookup in this pin's subset can see by
+    itself: only the total-row-count guard catches it, which is the whole
+    point of pinning that guard separately from the named subset.
+    """
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(FAMILY_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+
+    _assert_family_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) the "72 of 72 survive" tally drops by one on a family_summary row.
+    regressed = df.copy(deep=True)
+    summary_rows = regressed.index[regressed["scope"] == "family_summary"]
+    assert len(summary_rows) > 0, "expected the family_summary scope to be present"
+    row = summary_rows[0]
+    regressed.loc[row, "n_headline_surviving_holm"] = regressed.loc[row, "n_headline_surviving_holm"] - 1
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(regressed, golden)
+
+    # (b) a family size off by one.
+    off_by_one = df.copy(deep=True)
+    off_by_one.loc[row, "family_size"] = int(off_by_one.loc[row, "family_size"]) - 1
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(off_by_one, golden)
+
+    # (c) a row disappears from OUTSIDE the eight pinned rows: no identity
+    #     lookup in this pin's subset notices, so only the total-row-count
+    #     guard can catch it. Matched on the full (family_definition, test_id)
+    #     pair, not test_id alone: the pinned per-test row's test_id is pooled
+    #     into several OTHER family definitions too (F2, F4, F5, F7 all pool
+    #     the main sweep), and those rows are not part of the pinned eight.
+    pinned_keys = set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS)
+    row_keys = list(zip(df["family_definition"], df["test_id"]))
+    unpinned_rows = [i for i, key in zip(df.index, row_keys) if key not in pinned_keys]
+    assert len(unpinned_rows) > 0
+    dropped = df.drop(index=unpinned_rows[0])
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(dropped, golden)
+
+    assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_family_sensitivity_pin_bites_on_a_p_value_magnitude_shift():
+    """The one pinned per-test row's p-values moving far in magnitude while
+    staying far below the old absolute floor. The seven family_summary rows'
+    own worst-p figures never get small enough to demonstrate this rule (see
+    FAMILY_SENSITIVITY_IDENTITY's comment above), which is the reason that
+    eighth row is pinned at all.
+    """
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(FAMILY_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+
+    _assert_family_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    perturbed_to = 1e-20
+    target = df.index[
+        (df["family_definition"] == "F1_main_sweep_primary_120")
+        & (df["test_id"] == "main|k=1|bc=3|capacity_both|feeder_coefficient_of_variation")
+    ]
+    assert len(target) == 1, "expected exactly one row for the pinned per-test key"
+    row = target[0]
+    for column in ("p_uncorrected", "p_holm", "p_bh"):
+        moved = df.copy(deep=True)
+        original = float(moved.loc[row, column])
+        assert original < 1e-30, f"{column}: expected a real p-value far below the old absolute floor"
+        assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+            f"{column}: the old rule really did call {original!r} and {perturbed_to!r} equal"
+        )
+        moved.loc[row, column] = perturbed_to
+        with pytest.raises(AssertionError):
+            _assert_family_sensitivity_matches_golden(moved, golden)
+
+    assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_family_sensitivity_aggregate_pin_bites_on_an_unpinned_row_flag_flip():
+    """A survives_holm_alpha05 flag flipping on a row OUTSIDE the eight
+    individually pinned rows: no identity lookup in the claim-bearing subset
+    can see this row at all, so only the whole-file aggregate counts catch
+    it, on both the affected family_definition's own count and the overall
+    count.
+    """
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(FAMILY_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+
+    _assert_family_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    pinned_keys = set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS)
+    row_keys = list(zip(df["family_definition"], df["test_id"]))
+    candidates = [
+        i
+        for i, key, value in zip(df.index, row_keys, df["survives_holm_alpha05"])
+        if key not in pinned_keys and value is True
+    ]
+    assert len(candidates) > 0, "expected an unpinned row currently surviving Holm correction"
+    row = candidates[0]
+    assert (df.loc[row, "family_definition"], df.loc[row, "test_id"]) not in pinned_keys
+
+    flipped = df.copy(deep=True)
+    flipped.loc[row, "survives_holm_alpha05"] = False
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(flipped, golden)
+
+    assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_family_sensitivity_aggregate_pin_bites_on_an_unpinned_p_value_magnitude_shift():
+    """The file's global-minimum p_holm, which sits on rows OUTSIDE the eight
+    individually pinned rows, moving from its real value to 1e-20: exactly the
+    old rel=1e-9/abs=1e-9 rule's blind spot, now caught by the relative-only
+    min/max aggregate instead of by an individual row pin.
+
+    capacity_both and capacity_pricing_only are bit-identical to each other on
+    every metric (Section 6.1: the P&L channel adds no physics once pricing is
+    already on), so the row holding the file's minimum p_holm always has an
+    exact ablation twin carrying the identical value in the same
+    family_definition. Perturbing the minimum alone would leave that twin
+    still holding the true minimum and the aggregate would not move at all,
+    which is not a weaker bite, it is no bite; every row TIED at the true
+    minimum is perturbed together so the minimum is provably gone afterwards.
+    """
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(FAMILY_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+
+    _assert_family_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    pinned_keys = set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS)
+    original = float(df["p_holm"].min())
+    assert original < 1e-30, "expected a real p-value far below the old absolute floor"
+    perturbed_to = 1e-20
+    assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+        f"the old rule really did call {original!r} and {perturbed_to!r} equal"
+    )
+
+    tied = df.index[df["p_holm"] == original]
+    assert len(tied) >= 1, "expected at least one row holding the global minimum p_holm"
+    for candidate in tied:
+        assert (df.loc[candidate, "family_definition"], df.loc[candidate, "test_id"]) not in pinned_keys, (
+            "expected every row tied at the global minimum p_holm to sit outside the eight pinned rows"
+        )
+
+    moved = df.copy(deep=True)
+    moved.loc[tied, "p_holm"] = perturbed_to
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(moved, golden)
+
+    assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_family_sensitivity_log_sum_bites_on_a_mid_distribution_p_value_shift_that_min_max_and_counts_miss():
+    """The regression class counts and min/max cannot see: a p-value that
+    moves in the MIDDLE of the distribution, far from the smallest and
+    largest values, and without crossing the alpha=0.05 significance
+    boundary. This perturbs exactly one unpinned p_holm five orders of
+    magnitude and proves three things at once: the log-sum rejects it, and
+    (explicitly asserted, not just claimed in prose) every count and every
+    min/max in the same aggregate still match the untouched golden values.
+    That combination is what justifies the log-sum's own existence: without
+    it, this exact perturbation would pass every other guard in this file.
+    """
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(FAMILY_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+
+    _assert_family_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    pinned_keys = set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS)
+    family_definition = "F1_main_sweep_primary_120"
+    test_id = "main|k=1|bc=2|capacity_both|feeder_peak_to_average_ratio"
+    assert (family_definition, test_id) not in pinned_keys
+
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+    row = target[0]
+
+    group = df[df["family_definition"] == family_definition]
+    original = float(df.loc[row, "p_holm"])
+    group_min = float(group["p_holm"].min())
+    group_max = float(group["p_holm"].max())
+    # Neither the group's minimum nor its maximum: this is a genuinely
+    # mid-distribution value, and the shift below stays clear of both.
+    assert original == pytest.approx(5.541809e-10, rel=1e-6, abs=0.0)
+    assert original > group_min * 1e6 and original < group_max / 1e6
+
+    perturbed_to = original * 1e5  # five orders of magnitude, same sign, still << 1
+    assert perturbed_to < 0.05, "perturbation must stay a plausible p-value and keep the significance verdict unchanged"
+
+    moved = df.copy(deep=True)
+    moved.loc[row, "p_holm"] = perturbed_to
+
+    # The claim this test exists to prove: counts, min and max ALL still
+    # match the untouched golden values after this exact perturbation.
+    moved_group = moved[moved["family_definition"] == family_definition]
+    assert bool(moved.loc[row, "survives_holm_alpha05"]) is True, (
+        "perturbation must not cross the alpha=0.05 boundary, or the survives_holm count would move too"
+    )
+    unaffected_fields = (
+        "n_rows", "n_survives_holm_true", "n_survives_holm_false",
+        "n_survives_bh_true", "n_survives_bh_false", "n_degenerate_true",
+        "p_uncorrected_min", "p_uncorrected_max", "p_holm_min", "p_holm_max",
+        "p_bh_min", "p_bh_max", "n_rows_contributing",
+    )
+    moved_aggregate = _family_sensitivity_aggregate_row(moved_group)
+    golden_aggregate = golden["aggregates"]["by_family_definition"][family_definition]
+    for field in unaffected_fields:
+        assert moved_aggregate[field] == golden_aggregate[field], (
+            f"{field} changed after the perturbation; this test's premise (counts/min/max are blind "
+            "to a mid-distribution shift) no longer holds"
+        )
+
+    # The log-sum, and only the log-sum, catches it.
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(moved, golden)
+
+    assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+_LABEL_ONLY_UNAFFECTED_FIELDS = tuple(FAMILY_SENSITIVITY_AGGREGATE_FIELDS.keys())
+
+
+def _assert_only_label_counts_moved(actual_group: dict, golden_group: dict, context: str) -> None:
+    """Assert every value-column field (counts, extremes, log-sums) still
+    matches the untouched golden aggregate, so a test using this helper
+    documents, by construction, that the perturbation it applies is invisible
+    to everything except the label multiset.
+    """
+    for field in _LABEL_ONLY_UNAFFECTED_FIELDS:
+        assert actual_group[field] == golden_group[field], (
+            f"{context}: {field} changed; this perturbation was supposed to touch only a label column"
+        )
+
+
+def test_family_sensitivity_label_multiset_bites_on_metric_ablation_and_is_headline_72_mislabels():
+    """The gap an adversarial review reproduced three separate ways against
+    an earlier version of this module: a relabelled metric, a swapped
+    ablation, and a flipped is_headline_72, each on a row OUTSIDE the eight
+    individually pinned, each passing every value-column aggregate above
+    (counts, extremes, log-sums are all unchanged, asserted explicitly below,
+    not merely claimed) because none of those aggregates ever reads metric,
+    ablation or is_headline_72 at all. Only the label multiset sees any of
+    the three. Each of the three mirrors the reviewer's own reproduction
+    exactly: mislabelled.loc[target, "metric"] = "SWAPPED_WRONG_METRIC_LABEL",
+    swapped.loc[target3, "ablation"] = "capacity_pricing_only", and
+    flipped.loc[target2, "is_headline_72"] = not before_val.
+
+    A fourth part, added after a follow-up review found the first version of
+    this multiset was itself a hand-picked subset of label columns: a
+    mislabelled source on a monopoly_supplement row, proving the now-complete
+    "every identifier or label column" rule catches a column that earlier
+    version left out on purpose.
+    """
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(FAMILY_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+
+    _assert_family_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    pinned_keys = set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS)
+
+    # (a) a metric relabelled, mirroring the reviewer's own repro exactly.
+    family_definition = "F2_main_sweep_with_degenerates_180"
+    test_id = "main|k=0.5|bc=2|capacity_both|avg_cost_per_agent_eur"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+
+    mislabelled = df.copy(deep=True)
+    mislabelled.loc[target, "metric"] = "SWAPPED_WRONG_METRIC_LABEL"
+    group = mislabelled[mislabelled["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"metric mislabel: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(mislabelled, golden)
+
+    # (b) an ablation swapped, mirroring the reviewer's own repro exactly.
+    family_definition = "F5_everything_pooled"
+    test_id = "main|k=1.5|bc=3|capacity_both|load_concentration_hhi"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+    assert df.loc[target[0], "ablation"] == "capacity_both", "expected a real ablation change, not a no-op swap"
+
+    swapped = df.copy(deep=True)
+    swapped.loc[target, "ablation"] = "capacity_pricing_only"
+    group = swapped[swapped["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"ablation swap: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(swapped, golden)
+
+    # (c) is_headline_72 flipped, mirroring the reviewer's own repro exactly.
+    family_definition = "F7_everything_pooled_with_degenerates"
+    test_id = "main|k=2|bc=5|capacity_both|prosumer_self_sufficiency"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+    before_val = bool(df.loc[target[0], "is_headline_72"])
+
+    flipped = df.copy(deep=True)
+    flipped.loc[target, "is_headline_72"] = not before_val
+    group = flipped[flipped["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"is_headline_72 flip: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(flipped, golden)
+
+    # (d) source mislabelled, on a monopoly_supplement row: the column a
+    # follow-up review found the first version of this fix left out on
+    # purpose, without a principled reason to leave it out.
+    family_definition = "F4_pooled_with_monopoly"
+    test_id = "monopoly|k=0.5|bc=1|capacity_pricing_only|feeder_coefficient_of_variation"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+    assert df.loc[target[0], "source"] == "monopoly_supplement", "expected a real source change, not a no-op"
+
+    source_mislabelled = df.copy(deep=True)
+    source_mislabelled.loc[target, "source"] = "SWAPPED_WRONG_SOURCE_LABEL"
+    group = source_mislabelled[source_mislabelled["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"source mislabel: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(source_mislabelled, golden)
+
+    assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+FAMILY_SENSITIVITY_COLUMNS = (
+    "family_definition",
+    "family_key",
+    "family_size",
+    "n_families_in_definition",
+    "scope",
+    "source",
+    "k",
+    "broker_count",
+    "ablation",
+    "cell_is_stamped_not_native",
+    "metric",
+    "test_id",
+    "is_headline_72",
+    "degenerate",
+    "p_uncorrected",
+    "p_holm",
+    "p_bh",
+    "survives_holm_alpha05",
+    "survives_bh_alpha05",
+    "alpha",
+    "n_headline_tests",
+    "n_headline_surviving_holm",
+    "n_headline_surviving_bh",
+    "worst_headline_p_uncorrected",
+    "worst_headline_p_holm",
+    "worst_headline_p_bh",
+    "bonferroni_alpha_over_family_size",
+    "notes",
+)
+
+
+def test_family_sensitivity_csv_column_set_matches_pinned():
+    _skip_unless_results_artifact_available(FAMILY_SENSITIVITY_CSV_PATH)
+    import pandas as pd
+
+    header = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH, nrows=0).columns
+    _assert_exact_column_set(header, FAMILY_SENSITIVITY_COLUMNS, "results/family_sensitivity.csv")
+
+
+def test_family_sensitivity_csv_column_set_pin_bites_on_growth_and_shrinkage():
+    _skip_unless_results_artifact_available(FAMILY_SENSITIVITY_CSV_PATH)
+    import pandas as pd
+
+    header = list(pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH, nrows=0).columns)
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(header + ["a_new_column"], FAMILY_SENSITIVITY_COLUMNS, "results/family_sensitivity.csv")
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(header[:-1], FAMILY_SENSITIVITY_COLUMNS, "results/family_sensitivity.csv")
+
+
+# ---------------------------------------------------------------------------
 # Regeneration guard: a plain pytest run must never rewrite the golden files.
 # scripts/regenerate_golden_master.py sits outside pyproject.toml's testpaths
 # ("tests"), so pytest's collector never looks at it and this module never
@@ -1877,6 +3234,9 @@ def test_regeneration_script_import_does_not_write_golden_files():
         STRUCTURAL_SENSITIVITY_GOLDEN_PATH,
         DEMAND_SOURCE_GOLDEN_PATH,
         MONOPOLY_GOLDEN_PATH,
+        EFFECT_SIZES_GOLDEN_PATH,
+        SUMMARY_STATS_CORRECTED_GOLDEN_PATH,
+        FAMILY_SENSITIVITY_GOLDEN_PATH,
     ):
         if known_path.is_file():
             assert known_path in golden_paths, f"golden file missing from the no-rewrite snapshot: {known_path}"
