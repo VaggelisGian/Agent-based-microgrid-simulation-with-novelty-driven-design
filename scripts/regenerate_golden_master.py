@@ -37,6 +37,14 @@ What this writes:
     headline comparison).
   - tests/golden/monopoly_comparison_pins.json: every data row of
     results/monopoly_comparison.csv (the broker_count=1 monopoly arm).
+  - tests/golden/effect_sizes_pins.json: every data row of
+    results/effect_sizes.csv (Chapter 1's headline figures).
+  - tests/golden/summary_stats_corrected_pins.json: every data row of
+    results/summary_stats_corrected.csv (Section 6.10's per-comparison
+    multiple-comparison correction and bootstrap-CI detail).
+  - tests/golden/family_sensitivity_pins.json: a CLAIM-BEARING SUBSET (not
+    every row; see FAMILY_SENSITIVITY_IDENTITY's comment below) of
+    results/family_sensitivity.csv, plus that file's total row count.
 
 Every CSV named above is READ-ONLY input here. This script writes nothing but
 tests/golden/*.json, and each CSV-derived snapshot is skipped with a printed
@@ -73,6 +81,12 @@ DEMAND_SOURCE_GOLDEN_PATH = GOLDEN_DIR / "demand_source_comparison_pins.json"
 DEMAND_SOURCE_CSV_PATH = _RESULTS_DIR / "demand_source_comparison.csv"
 MONOPOLY_GOLDEN_PATH = GOLDEN_DIR / "monopoly_comparison_pins.json"
 MONOPOLY_CSV_PATH = _RESULTS_DIR / "monopoly_comparison.csv"
+EFFECT_SIZES_GOLDEN_PATH = GOLDEN_DIR / "effect_sizes_pins.json"
+EFFECT_SIZES_CSV_PATH = _RESULTS_DIR / "effect_sizes.csv"
+FAMILY_SENSITIVITY_GOLDEN_PATH = GOLDEN_DIR / "family_sensitivity_pins.json"
+FAMILY_SENSITIVITY_CSV_PATH = _RESULTS_DIR / "family_sensitivity.csv"
+SUMMARY_STATS_CORRECTED_GOLDEN_PATH = GOLDEN_DIR / "summary_stats_corrected_pins.json"
+SUMMARY_STATS_CORRECTED_CSV_PATH = _RESULTS_DIR / "summary_stats_corrected.csv"
 
 # Must match tests/test_golden_master.py's SHORT_HORIZON_HOURS / SHORT_NUM_AGENTS
 # / SHORT_SEED exactly. Horizon comfortably exceeds the 168h rolling window
@@ -187,6 +201,110 @@ MONOPOLY_PINNED_FIELDS = {
 # Constant across every row of monopoly_comparison.csv, so pinned once at the
 # top level and checked against every row by the test.
 MONOPOLY_CONSTANT_FIELDS = ("metric3_sign_convention", "note")
+
+EFFECT_SIZES_IDENTITY = ("block", "k", "broker_count", "ablation", "metric")
+# Every non-identity column results/effect_sizes.csv carries. The five
+# identity columns plus these fifteen are the whole header, so no column of
+# that file is left unpinned. Must match the same-named list in
+# tests/test_golden_master.py exactly.
+EFFECT_SIZES_PINNED_FIELDS = {
+    "metric_label": "str",
+    "n_seeds": "int",
+    "mean_disabled": "float",
+    "mean_ablation": "float",
+    "paired_mean_diff": "float",
+    "paired_mean_pct_change": "float",
+    "naive_pct_change_of_means": "float",
+    "paired_dz": "float",
+    "paired_p": "pvalue",
+    "cohens_d_independent": "float",
+    "degenerate_paired_diff": "bool",
+    "max_abs_paired_diff": "float",
+    "pnl_physical_leak": "str",
+    "metric3_sign_convention": "str",
+    "note": "str",
+}
+
+SUMMARY_STATS_CORRECTED_IDENTITY = ("scope", "k", "broker_count", "ablation", "metric")
+# Every non-identity column results/summary_stats_corrected.csv carries. The
+# five identity columns plus these twenty-eight are the whole header. Must
+# match the same-named list in tests/test_golden_master.py exactly.
+SUMMARY_STATS_CORRECTED_PINNED_FIELDS = {
+    "metric_label": "str",
+    "n_seeds": "int",
+    "paired_mean_diff": "float",
+    "paired_mean_pct_change": "float",
+    "paired_dz": "float",
+    "p_uncorrected": "pvalue",
+    "p_holm": "pvalue",
+    "p_bh": "pvalue",
+    "survives_holm_alpha05": "bool",
+    "survives_bh_alpha05": "bool",
+    "ci95_t_lo": "float",
+    "ci95_t_hi": "float",
+    "ci95_boot_lo": "float",
+    "ci95_boot_hi": "float",
+    "ci_disagreement_flag": "bool",
+    "ci_disagreement_detail": "str",
+    "ci_width_ratio": "float",
+    "degenerate": "bool",
+    "correction_family": "str",
+    "correction_family_size": "int",
+    "family_size_primary": "int",
+    "family_size_alternative": "int",
+    "family_size_monopoly_secondary": "int",
+    "bootstrap_seed": "int",
+    "n_bootstrap": "int",
+    "alpha": "float",
+    "metric3_sign_convention": "str",
+    "notes": "str",
+}
+
+# results/family_sensitivity.csv is 1227 rows: a whole-file digest at that
+# scale would run to roughly 1.6 MB (about ten times structural_sensitivity's
+# 124-row, 177891-byte snapshot), so it is pinned as a named CLAIM-BEARING
+# SUBSET instead, plus the file's total row count as a shape guard. See
+# FAMILY_SENSITIVITY_IDENTITY's comment in tests/test_golden_master.py for the
+# full reasoning; the constants below must match that file's exactly.
+FAMILY_SENSITIVITY_IDENTITY = ("family_definition", "test_id")
+FAMILY_SENSITIVITY_PINNED_FIELDS = {
+    "family_size": "int",
+    "n_families_in_definition": "int",
+    "ablation": "str",
+    "metric": "str",
+    "is_headline_72": "bool",
+    "degenerate": "bool",
+    "p_uncorrected": "pvalue",
+    "p_holm": "pvalue",
+    "p_bh": "pvalue",
+    "survives_holm_alpha05": "bool",
+    "survives_bh_alpha05": "bool",
+    "alpha": "float",
+    "n_headline_tests": "int",
+    "n_headline_surviving_holm": "int",
+    "n_headline_surviving_bh": "int",
+    "worst_headline_p_uncorrected": "pvalue",
+    "worst_headline_p_holm": "pvalue",
+    "worst_headline_p_bh": "pvalue",
+    "bonferroni_alpha_over_family_size": "float",
+    "notes": "str",
+}
+# The explicit, named claim-bearing subset: the seven family_summary rows
+# (one per family definition) plus the one real per-test row that backs
+# Section 6.2's own quoted "d_z = -22.2 (p = 7.4e-41)" figure and is small
+# enough in magnitude to prove the relative-only p-value rule earns its keep
+# on this file too. Must match the same-named constant in
+# tests/test_golden_master.py exactly.
+FAMILY_SENSITIVITY_PINNED_ROW_KEYS = (
+    ("F1_main_sweep_primary_120", "family_summary|F1_main_sweep_primary_120"),
+    ("F2_main_sweep_with_degenerates_180", "family_summary|F2_main_sweep_with_degenerates_180"),
+    ("F3_per_metric_24", "family_summary|F3_per_metric_24"),
+    ("F4_pooled_with_monopoly", "family_summary|F4_pooled_with_monopoly"),
+    ("F5_everything_pooled", "family_summary|F5_everything_pooled"),
+    ("F6_per_cell_k_by_broker_count", "family_summary|F6_per_cell_k_by_broker_count"),
+    ("F7_everything_pooled_with_degenerates", "family_summary|F7_everything_pooled_with_degenerates"),
+    ("F1_main_sweep_primary_120", "main|k=1|bc=3|capacity_both|feeder_coefficient_of_variation"),
+)
 
 _REGENERATION_COMMAND = "python scripts/regenerate_golden_master.py"
 
@@ -421,6 +539,163 @@ def _compute_monopoly_comparison_pins() -> dict | None:
     return pins
 
 
+def _compute_effect_sizes_pins() -> dict | None:
+    if not EFFECT_SIZES_CSV_PATH.is_file():
+        print(f"note: {EFFECT_SIZES_CSV_PATH} not present; skipping effect_sizes_pins.json regeneration")
+        return None
+
+    import pandas as pd
+
+    df = pd.read_csv(EFFECT_SIZES_CSV_PATH)
+    return {
+        "_comment": (
+            "Pinned digest of results/effect_sizes.csv (Chapter 1's headline figures and "
+            "the per-cell effect sizes behind Sections 6.1 to 6.9): every data row and every "
+            "column, keyed by (block, k, broker_count, ablation, metric), plus the row "
+            "count. That key is unique over the whole file because the analysis emits "
+            "exactly one row per combination of those five. Pinned whole rather than as a "
+            "subset: 185 rows is small enough that a claim-bearing subset would save little. "
+            "results/effect_sizes.csv is read-only input here and is never written by this "
+            "script; only this pinned snapshot is written. Regenerate DELIBERATELY, never "
+            "automatically, only after a verified intentional rerun of that analysis, by "
+            f"running from the repository root: {_REGENERATION_COMMAND}"
+        ),
+        "n_rows": int(len(df)),
+        "rows": _row_keyed_rows(df, EFFECT_SIZES_IDENTITY, EFFECT_SIZES_PINNED_FIELDS),
+    }
+
+
+def _compute_summary_stats_corrected_pins() -> dict | None:
+    if not SUMMARY_STATS_CORRECTED_CSV_PATH.is_file():
+        print(
+            f"note: {SUMMARY_STATS_CORRECTED_CSV_PATH} not present; "
+            "skipping summary_stats_corrected_pins.json regeneration"
+        )
+        return None
+
+    import pandas as pd
+
+    df = pd.read_csv(SUMMARY_STATS_CORRECTED_CSV_PATH)
+    return {
+        "_comment": (
+            "Pinned digest of results/summary_stats_corrected.csv (Section 6.10's "
+            "multiple-comparison correction and bootstrap-CI detail, one row per "
+            "comparison): every data row and every column, keyed by (scope, k, "
+            "broker_count, ablation, metric), plus the row count. Pinned whole (188 rows, "
+            "the same scale as summary_stats.csv's 240). "
+            "results/summary_stats_corrected.csv is read-only input here and is never "
+            "written by this script; only this pinned snapshot is written. Regenerate "
+            "DELIBERATELY, never automatically, only after a verified intentional rerun of "
+            f"that analysis, by running from the repository root: {_REGENERATION_COMMAND}"
+        ),
+        "n_rows": int(len(df)),
+        "rows": _row_keyed_rows(df, SUMMARY_STATS_CORRECTED_IDENTITY, SUMMARY_STATS_CORRECTED_PINNED_FIELDS),
+    }
+
+
+# See tests/test_golden_master.py's FAMILY_SENSITIVITY_AGGREGATE_FIELDS
+# comment for the full rationale (why min/max alone miss a mid-distribution
+# p-value shift, why a plain sum of p is the wrong fix, and why this floor and
+# this value). Must match that file's P_VALUE_LOG_FLOOR exactly.
+P_VALUE_LOG_FLOOR = 1e-300
+
+
+def _log10_with_floor(value: float) -> float:
+    return math.log10(value) if value > P_VALUE_LOG_FLOOR else math.log10(P_VALUE_LOG_FLOOR)
+
+
+def _family_sensitivity_aggregate_row(group) -> dict:
+    """Whole-group counts, p-value extrema, and log-magnitude sums. Twin of
+    the same-named function in tests/test_golden_master.py; must compute
+    identically or the snapshot written here stops describing what that file
+    checks.
+    """
+    p_columns = ("p_uncorrected", "p_holm", "p_bh")
+    row = {
+        "n_rows": int(len(group)),
+        "n_survives_holm_true": int(group["survives_holm_alpha05"].eq(True).sum()),
+        "n_survives_holm_false": int(group["survives_holm_alpha05"].eq(False).sum()),
+        "n_survives_bh_true": int(group["survives_bh_alpha05"].eq(True).sum()),
+        "n_survives_bh_false": int(group["survives_bh_alpha05"].eq(False).sum()),
+        "n_degenerate_true": int(group["degenerate"].eq(True).sum()),
+        "p_uncorrected_min": float(group["p_uncorrected"].min()),
+        "p_uncorrected_max": float(group["p_uncorrected"].max()),
+        "p_holm_min": float(group["p_holm"].min()),
+        "p_holm_max": float(group["p_holm"].max()),
+        "p_bh_min": float(group["p_bh"].min()),
+        "p_bh_max": float(group["p_bh"].max()),
+        "n_rows_contributing": int(group["p_uncorrected"].notna().sum()),
+    }
+    for column in p_columns:
+        values = group[column].dropna()
+        row[f"sum_log10_{column}"] = float(sum(_log10_with_floor(float(value)) for value in values))
+        row[f"n_at_floor_{column}"] = int((values <= P_VALUE_LOG_FLOOR).sum())
+    return row
+
+
+def _family_sensitivity_aggregates(df) -> dict:
+    """Aggregates computed over the FULL dataframe (all 1227 rows), not the
+    claim-bearing subset: this is the whole-file guard that closes the gap
+    the eight individually pinned rows leave open on their own.
+    """
+    overall = _family_sensitivity_aggregate_row(df)
+    overall["n_distinct_family_definitions"] = int(df["family_definition"].nunique())
+    overall["n_distinct_test_ids"] = int(df["test_id"].nunique())
+    by_family_definition = {
+        family_definition: _family_sensitivity_aggregate_row(group)
+        for family_definition, group in df.groupby("family_definition", sort=True)
+    }
+    return {"overall": overall, "by_family_definition": by_family_definition}
+
+
+def _compute_family_sensitivity_pins() -> dict | None:
+    if not FAMILY_SENSITIVITY_CSV_PATH.is_file():
+        print(f"note: {FAMILY_SENSITIVITY_CSV_PATH} not present; skipping family_sensitivity_pins.json regeneration")
+        return None
+
+    import pandas as pd
+
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+    wanted = set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS)
+    mask = df.apply(lambda row: (row["family_definition"], row["test_id"]) in wanted, axis=1)
+    subset = df[mask]
+    assert len(subset) == len(wanted), (
+        f"expected exactly {len(wanted)} claim-bearing rows in {FAMILY_SENSITIVITY_CSV_PATH}, "
+        f"found {len(subset)}; FAMILY_SENSITIVITY_PINNED_ROW_KEYS no longer matches the file"
+    )
+    return {
+        "_comment": (
+            "Pinned digest of a CLAIM-BEARING SUBSET of results/family_sensitivity.csv "
+            "(1227 rows; a whole-file digest at this scale would run to roughly 1.6 MB, so "
+            "only the rows this package actually quotes a number from are pinned): the "
+            "seven family_summary rows (one per family definition, carrying every number "
+            "Section 6.10, Slide 13a/14, DECISIONS and qa_prep quote about the "
+            "family-sensitivity check) plus the one real per-test row backing Section 6.2's "
+            "own quoted 'd_z = -22.2 (p = 7.4e-41)' figure and Section 6.10's "
+            "p_holm-reproduction claim. Keyed by (family_definition, test_id). "
+            "n_total_rows is the file's real row count (a shape guard covering the 1219 "
+            "rows this subset does not otherwise look at); n_rows is the size of the "
+            "pinned subset itself. 'aggregates' closes that same gap a second, "
+            "complementary way: whole-file counts (survives_holm_alpha05, "
+            "survives_bh_alpha05, degenerate) and p-value extrema (p_uncorrected, p_holm, "
+            "p_bh), computed per family_definition and over the whole file, over EVERY row, "
+            "not just the pinned eight, so a flipped flag or a shifted p-value anywhere in "
+            "the file still moves a count or an extremum. Deliberately not a bit-exact "
+            "whole-file digest: Phase 11 already found that check false-alarms on "
+            "cross-process 1-ULP floating-point drift on a grid this size. "
+            "results/family_sensitivity.csv is read-only input here "
+            "and is never written by this script; only this pinned snapshot is written. "
+            "Regenerate DELIBERATELY, never automatically, only after a verified "
+            "intentional rerun of that analysis, by running from the repository root: "
+            f"{_REGENERATION_COMMAND}"
+        ),
+        "n_total_rows": int(len(df)),
+        "n_rows": int(len(subset)),
+        "rows": _row_keyed_rows(subset, FAMILY_SENSITIVITY_IDENTITY, FAMILY_SENSITIVITY_PINNED_FIELDS),
+        "aggregates": _family_sensitivity_aggregates(df),
+    }
+
+
 def _write_golden(path: Path, payload: dict) -> None:
     with open(path, "w", encoding="ascii") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
@@ -438,6 +713,9 @@ def main() -> None:
         (STRUCTURAL_SENSITIVITY_GOLDEN_PATH, _compute_structural_sensitivity_pins),
         (DEMAND_SOURCE_GOLDEN_PATH, _compute_demand_source_comparison_pins),
         (MONOPOLY_GOLDEN_PATH, _compute_monopoly_comparison_pins),
+        (EFFECT_SIZES_GOLDEN_PATH, _compute_effect_sizes_pins),
+        (SUMMARY_STATS_CORRECTED_GOLDEN_PATH, _compute_summary_stats_corrected_pins),
+        (FAMILY_SENSITIVITY_GOLDEN_PATH, _compute_family_sensitivity_pins),
     ):
         payload = compute()
         if payload is not None:
