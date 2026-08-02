@@ -1,0 +1,150 @@
+{
+  "_comment": "Per-(k, capacity_surcharge_divisor, ablation) cell aggregates over results/sweep_dose_matched_monopoly.parquet (D11's dose-matched-monopoly arm, Phase 18.1): the row count (30 in every one of the 12 cells) and the mean of total_deferred_kwh, feeder_peak_to_average_ratio, feeder_coefficient_of_variation, avg_cost_per_agent_eur, capacity_fire_rate and total_capacity_charge_eur, keyed by (k, capacity_surcharge_divisor, ablation). These are claim-bearing aggregates no CSV covers directly: docs/DECISIONS.md's 'D11 result' section quotes the peak-to-average and deferred-volume figures straight from this parquet, filtered the same way. results/sweep_dose_matched_monopoly.parquet is read-only input here and is never written by this script; only this pinned snapshot is written. Regenerate DELIBERATELY, never automatically, only after a verified intentional rerun of that sweep, by running from the repository root: python scripts/regenerate_golden_master.py",
+  "n_rows": 12,
+  "rows": [
+    {
+      "ablation": "capacity_both",
+      "capacity_surcharge_divisor": 2,
+      "k": 0.5,
+      "mean_avg_cost_per_agent_eur": 736.7822395094174,
+      "mean_capacity_fire_rate": 0.308162100456621,
+      "mean_feeder_coefficient_of_variation": 0.5697986089737443,
+      "mean_feeder_peak_to_average_ratio": 3.5147770905524216,
+      "mean_total_capacity_charge_eur": 9432.455067535071,
+      "mean_total_deferred_kwh": 80638.07867784433,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_disabled",
+      "capacity_surcharge_divisor": 2,
+      "k": 0.5,
+      "mean_avg_cost_per_agent_eur": 670.0218248000109,
+      "mean_capacity_fire_rate": 0.0,
+      "mean_feeder_coefficient_of_variation": 0.6803917822833174,
+      "mean_feeder_peak_to_average_ratio": 3.517722262934225,
+      "mean_total_capacity_charge_eur": 0.0,
+      "mean_total_deferred_kwh": 0.0,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_both",
+      "capacity_surcharge_divisor": 3,
+      "k": 0.5,
+      "mean_avg_cost_per_agent_eur": 719.3848930317264,
+      "mean_capacity_fire_rate": 0.3035159817351598,
+      "mean_feeder_coefficient_of_variation": 0.5862584390728108,
+      "mean_feeder_peak_to_average_ratio": 3.1603164971409883,
+      "mean_total_capacity_charge_eur": 10378.299271824035,
+      "mean_total_deferred_kwh": 54501.46974420095,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_disabled",
+      "capacity_surcharge_divisor": 3,
+      "k": 0.5,
+      "mean_avg_cost_per_agent_eur": 670.0218248000109,
+      "mean_capacity_fire_rate": 0.0,
+      "mean_feeder_coefficient_of_variation": 0.6803917822833174,
+      "mean_feeder_peak_to_average_ratio": 3.517722262934225,
+      "mean_total_capacity_charge_eur": 0.0,
+      "mean_total_deferred_kwh": 0.0,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_both",
+      "capacity_surcharge_divisor": 5,
+      "k": 0.5,
+      "mean_avg_cost_per_agent_eur": 701.5274600630637,
+      "mean_capacity_fire_rate": 0.30052130898021306,
+      "mean_feeder_coefficient_of_variation": 0.6190329172012101,
+      "mean_feeder_peak_to_average_ratio": 3.238647407691974,
+      "mean_total_capacity_charge_eur": 11879.107307044755,
+      "mean_total_deferred_kwh": 32658.334805407107,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_disabled",
+      "capacity_surcharge_divisor": 5,
+      "k": 0.5,
+      "mean_avg_cost_per_agent_eur": 670.0218248000109,
+      "mean_capacity_fire_rate": 0.0,
+      "mean_feeder_coefficient_of_variation": 0.6803917822833174,
+      "mean_feeder_peak_to_average_ratio": 3.517722262934225,
+      "mean_total_capacity_charge_eur": 0.0,
+      "mean_total_deferred_kwh": 0.0,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_both",
+      "capacity_surcharge_divisor": 2,
+      "k": 1.0,
+      "mean_avg_cost_per_agent_eur": 712.8051701964995,
+      "mean_capacity_fire_rate": 0.1865943683409437,
+      "mean_feeder_coefficient_of_variation": 0.6342161807530384,
+      "mean_feeder_peak_to_average_ratio": 3.5378366315965297,
+      "mean_total_capacity_charge_eur": 5016.3808575289395,
+      "mean_total_deferred_kwh": 49941.44911896594,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_disabled",
+      "capacity_surcharge_divisor": 2,
+      "k": 1.0,
+      "mean_avg_cost_per_agent_eur": 670.0218248000109,
+      "mean_capacity_fire_rate": 0.0,
+      "mean_feeder_coefficient_of_variation": 0.6803917822833174,
+      "mean_feeder_peak_to_average_ratio": 3.517722262934225,
+      "mean_total_capacity_charge_eur": 0.0,
+      "mean_total_deferred_kwh": 0.0,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_both",
+      "capacity_surcharge_divisor": 3,
+      "k": 1.0,
+      "mean_avg_cost_per_agent_eur": 703.6272973510074,
+      "mean_capacity_fire_rate": 0.20243150684931507,
+      "mean_feeder_coefficient_of_variation": 0.6356705455938243,
+      "mean_feeder_peak_to_average_ratio": 3.1614247903351127,
+      "mean_total_capacity_charge_eur": 4851.0937593274375,
+      "mean_total_deferred_kwh": 36030.079553290736,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_disabled",
+      "capacity_surcharge_divisor": 3,
+      "k": 1.0,
+      "mean_avg_cost_per_agent_eur": 670.0218248000109,
+      "mean_capacity_fire_rate": 0.0,
+      "mean_feeder_coefficient_of_variation": 0.6803917822833174,
+      "mean_feeder_peak_to_average_ratio": 3.517722262934225,
+      "mean_total_capacity_charge_eur": 0.0,
+      "mean_total_deferred_kwh": 0.0,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_both",
+      "capacity_surcharge_divisor": 5,
+      "k": 1.0,
+      "mean_avg_cost_per_agent_eur": 691.0895710313077,
+      "mean_capacity_fire_rate": 0.1885654490106545,
+      "mean_feeder_coefficient_of_variation": 0.6507036761987508,
+      "mean_feeder_peak_to_average_ratio": 3.2383354266704005,
+      "mean_total_capacity_charge_eur": 5303.568653380596,
+      "mean_total_deferred_kwh": 21208.918290142785,
+      "n_rows": 30
+    },
+    {
+      "ablation": "capacity_disabled",
+      "capacity_surcharge_divisor": 5,
+      "k": 1.0,
+      "mean_avg_cost_per_agent_eur": 670.0218248000109,
+      "mean_capacity_fire_rate": 0.0,
+      "mean_feeder_coefficient_of_variation": 0.6803917822833174,
+      "mean_feeder_peak_to_average_ratio": 3.517722262934225,
+      "mean_total_capacity_charge_eur": 0.0,
+      "mean_total_deferred_kwh": 0.0,
+      "n_rows": 30
+    }
+  ]
+}
