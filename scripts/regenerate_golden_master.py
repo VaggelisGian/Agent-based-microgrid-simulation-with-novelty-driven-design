@@ -604,11 +604,41 @@ def _log10_with_floor(value: float) -> float:
     return math.log10(value) if value > P_VALUE_LOG_FLOOR else math.log10(P_VALUE_LOG_FLOOR)
 
 
+# See tests/test_golden_master.py's LABEL_COMBO_COLUMNS comment for the full
+# rule: every column of results/family_sensitivity.csv that is an identifier
+# or a label rather than a computed statistical output, not a hand-picked
+# subset. Must match that file's LABEL_COMBO_COLUMNS exactly.
+LABEL_COMBO_COLUMNS = (
+    "family_key",
+    "scope",
+    "source",
+    "k",
+    "broker_count",
+    "ablation",
+    "cell_is_stamped_not_native",
+    "metric",
+    "test_id",
+    "is_headline_72",
+)
+
+
+def _label_combo_key(row) -> str:
+    return "|".join(f"{column}={_identity_token(row[column])}" for column in LABEL_COMBO_COLUMNS)
+
+
+def _label_combo_counts(group) -> dict:
+    counts: dict = {}
+    for _, row in group.iterrows():
+        key = _label_combo_key(row)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _family_sensitivity_aggregate_row(group) -> dict:
-    """Whole-group counts, p-value extrema, and log-magnitude sums. Twin of
-    the same-named function in tests/test_golden_master.py; must compute
-    identically or the snapshot written here stops describing what that file
-    checks.
+    """Whole-group counts, p-value extrema, log-magnitude sums, and the
+    identity-adjacent label multiset. Twin of the same-named function in
+    tests/test_golden_master.py; must compute identically or the snapshot
+    written here stops describing what that file checks.
     """
     p_columns = ("p_uncorrected", "p_holm", "p_bh")
     row = {
@@ -630,17 +660,30 @@ def _family_sensitivity_aggregate_row(group) -> dict:
         values = group[column].dropna()
         row[f"sum_log10_{column}"] = float(sum(_log10_with_floor(float(value)) for value in values))
         row[f"n_at_floor_{column}"] = int((values <= P_VALUE_LOG_FLOOR).sum())
+    row["label_counts"] = _label_combo_counts(group)
     return row
 
 
 def _family_sensitivity_aggregates(df) -> dict:
     """Aggregates computed over the FULL dataframe (all 1227 rows), not the
     claim-bearing subset: this is the whole-file guard that closes the gap
-    the eight individually pinned rows leave open on their own.
+    the eight individually pinned rows leave open on their own. See
+    tests/test_golden_master.py's comment above FAMILY_SENSITIVITY_AGGREGATE_FIELDS
+    for exactly what this does and does not cover.
+
+    label_counts is dropped from the overall dict before it is returned: with
+    test_id in LABEL_COMBO_COLUMNS, every row's combination is already unique
+    within its own family_definition, so the overall multiset would be the
+    identical 1227 entries the seven per-family dicts already hold between
+    them, merged into one dict (the overall figure IS the sum of the
+    per-family ones). That is a pure duplicate carrying strictly less
+    information than the per-family breakdown, which can say WHICH family a
+    mislabel landed in; only the per-family breakdown is kept.
     """
     overall = _family_sensitivity_aggregate_row(df)
     overall["n_distinct_family_definitions"] = int(df["family_definition"].nunique())
     overall["n_distinct_test_ids"] = int(df["test_id"].nunique())
+    del overall["label_counts"]
     by_family_definition = {
         family_definition: _family_sensitivity_aggregate_row(group)
         for family_definition, group in df.groupby("family_definition", sort=True)
@@ -675,14 +718,41 @@ def _compute_family_sensitivity_pins() -> dict | None:
             "p_holm-reproduction claim. Keyed by (family_definition, test_id). "
             "n_total_rows is the file's real row count (a shape guard covering the 1219 "
             "rows this subset does not otherwise look at); n_rows is the size of the "
-            "pinned subset itself. 'aggregates' closes that same gap a second, "
-            "complementary way: whole-file counts (survives_holm_alpha05, "
-            "survives_bh_alpha05, degenerate) and p-value extrema (p_uncorrected, p_holm, "
-            "p_bh), computed per family_definition and over the whole file, over EVERY row, "
-            "not just the pinned eight, so a flipped flag or a shifted p-value anywhere in "
-            "the file still moves a count or an extremum. Deliberately not a bit-exact "
-            "whole-file digest: Phase 11 already found that check false-alarms on "
-            "cross-process 1-ULP floating-point drift on a grid this size. "
+            "pinned subset itself. 'aggregates' closes that same gap, over EVERY row, not "
+            "just the pinned eight, in three parts: (1) whole-file counts and p-value "
+            "extrema on six value columns (p_uncorrected, p_holm, p_bh, "
+            "survives_holm_alpha05, survives_bh_alpha05, degenerate); (2) log-magnitude sums "
+            "on the three p-value columns (sum_log10_p_uncorrected/p_holm/p_bh, floored at "
+            "P_VALUE_LOG_FLOOR=1e-300), closing the blind spot parts (1) leaves for a "
+            "p-value that moves in the middle of the distribution, where it flips no flag "
+            "and sets no new min or max; (3) an exact multiset over EVERY identifier and "
+            "label column the file has (family_key, scope, source, k, broker_count, "
+            "ablation, cell_is_stamped_not_native, metric, test_id, is_headline_72; every "
+            "other column is a computed statistical output, a constant setting, free text, "
+            "or the grouping key itself, none of which needed a separate label check), "
+            "computed and pinned PER family_definition ONLY, not also at the overall level, "
+            "closing a DIFFERENT blind spot that (1) and (2) cannot touch, since they never "
+            "read those columns: a mislabelled metric, a swapped ablation, a flipped "
+            "is_headline_72, a mislabelled source and so on all move no count, no extremum "
+            "and no log-sum at all. Including test_id pushes this multiset close to one "
+            "entry per row (313 distinct values across 1227), which is deliberate: every "
+            "label is pinned exactly, every value column is pinned in aggregate. The overall "
+            "level deliberately has no label_counts of its own: with test_id included, every "
+            "row's combination is already unique within its own family_definition, so an "
+            "overall multiset would be the identical 1227 entries the seven per-family dicts "
+            "already hold, merged into one (the overall count IS the sum of the per-family "
+            "ones), a pure duplicate that is strictly less diagnostic, since it cannot say "
+            "WHICH family a mislabel landed in the way the per-family breakdown can. An "
+            "adversarial review reproduced the original gap three separate ways, and a "
+            "follow-up review then found the first fix was itself a hand-picked subset of "
+            "label columns rather than all of them; both are why this is the rule now "
+            "rather than a narrower one. What remains unpinned even now: a change to an "
+            "unpinned row's individual p-value that preserves its family's log-sum exactly, "
+            "which needs two compensating shifts in exact reciprocal proportion, a coincidence "
+            "rather than a realistic regression, but a real and disclosed limit of a sum "
+            "rather than a per-row pin. Deliberately not a bit-exact whole-file digest: "
+            "Phase 11 already found that check false-alarms on cross-process 1-ULP "
+            "floating-point drift on a grid this size. "
             "results/family_sensitivity.csv is read-only input here "
             "and is never written by this script; only this pinned snapshot is written. "
             "Regenerate DELIBERATELY, never automatically, only after a verified "

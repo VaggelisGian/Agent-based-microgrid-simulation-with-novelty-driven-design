@@ -641,20 +641,53 @@ FAMILY_SENSITIVITY_PINNED_ROW_KEYS = (
 # The eight pinned rows above cover exactly eight of family_sensitivity.csv's
 # 1227 rows; the other 1219 were, until this section, guarded only by the
 # total-row-count shape guard and the exact-column-set pin, neither of which
-# would catch a single unpinned p-value shifting or a single unpinned
-# survives_holm_alpha05 flag flipping. This closes that gap with WHOLE-FILE
-# AGGREGATE GUARDS: counts and p-value extrema computed over every row, per
-# family_definition and over the whole file. Deliberately NOT a bit-exact
-# whole-file digest or a checksum: Phase 11's structural-sensitivity work
-# already found that a bit-exact equality check on a large grid false-alarms
-# on cross-process 1-ULP floating-point drift (reproduced three ways at the
-# time, see docs/PROGRESS.md), which is exactly why every pin in this module
-# compares by tolerance instead of by hash. A flipped flag or a shifted
-# p-value anywhere in the file still moves a count or an extremum regardless
-# of which of the 1219 non-individually-pinned rows it happens on, and the
-# p-value kind's relative-only tolerance (_assert_pvalue_close) still governs
-# the min/max fields, so a shift that stays under the old absolute floor is
-# still caught, exactly as everywhere else in this module.
+# would catch a single unpinned p-value shifting, a single unpinned
+# survives_holm_alpha05 flag flipping, or a single unpinned row's metric,
+# ablation or is_headline_72 label being corrupted. This closes that gap with
+# WHOLE-FILE AGGREGATE GUARDS, in three parts, computed over every row:
+#
+#   1. counts and p-value extrema on the six VALUE columns (p_uncorrected,
+#      p_holm, p_bh, survives_holm_alpha05, survives_bh_alpha05, degenerate),
+#      pinned BOTH per family_definition AND over the whole file;
+#   2. log-magnitude sums on the three p-value columns (see
+#      P_VALUE_LOG_FLOOR's comment below), also pinned at both levels,
+#      closing the blind spot part 1 leaves for a p-value that moves in the
+#      MIDDLE of the distribution;
+#   3. an exact multiset over EVERY identifier and label column the file has
+#      (see LABEL_COMBO_COLUMNS's comment below for the full list and why
+#      each one belongs there), pinned PER family_definition ONLY, not also
+#      at the overall level (see FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS's
+#      comment below for why the overall figure would be a pure duplicate).
+#      This closes a DIFFERENT blind spot from parts 1 and 2: they only ever
+#      read the six value columns, so a bug that mislabels which row a
+#      p-value belongs to (a wrong metric, a swapped ablation, a flipped
+#      is_headline_72, a mislabelled source, and so on) moves no count, no
+#      extremum and no log-sum at all, and would otherwise pass silently on
+#      any of the 1219 rows outside the eight individually pinned above. An
+#      adversarial review reproduced exactly this, three separate ways,
+#      against an earlier version of this section that had only parts 1 and
+#      2, and a follow-up review then found that the first fix for it was
+#      itself a hand-picked subset of label columns rather than all of them;
+#      it is not a hypothetical, and this file's own docs/DECISIONS.md keeps
+#      a correction section for exactly this failure mode.
+#
+# Deliberately NOT a bit-exact whole-file digest or a checksum: Phase 11's
+# structural-sensitivity work already found that a bit-exact equality check
+# on a large grid false-alarms on cross-process 1-ULP floating-point drift
+# (reproduced three ways at the time, see docs/PROGRESS.md), which is exactly
+# why every pin in this module compares by tolerance instead of by hash.
+#
+# What is and is not covered, stated precisely rather than left to be
+# inferred: row count, column set, the six value columns' counts and
+# extremes, the log-magnitude sums, and the identity-label multisets are
+# pinned across all 1227 rows. What remains unpinned is any change to an
+# unpinned row's individual p-value that preserves its family's log-sum,
+# which requires two compensating shifts in exact reciprocal proportion (for
+# example row A's p_holm multiplied by some factor while row B's is divided
+# by that same factor, holding the sum of logs fixed): a coincidence, not a
+# realistic regression, but a real and disclosed limit of a sum rather than a
+# per-row pin, and stated here rather than left for the aggregate to imply
+# more than it delivers.
 #
 # Counts and min/max alone still have a blind spot: a p-value that moves in
 # the MIDDLE of the distribution (neither the smallest nor the largest, and
@@ -726,6 +759,123 @@ FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS = dict(
     n_distinct_family_definitions="int",
     n_distinct_test_ids="int",
 )
+# The label multiset itself (see LABEL_COMBO_COLUMNS below) is pinned PER
+# family_definition ONLY, not at the overall level too, unlike every other
+# field above. Reason, not a size shortcut: with test_id in the combination,
+# every row's combination is already unique within its own family_definition
+# (each family_definition's own test_id values never repeat), so the overall
+# multiset would hold the exact same 1227 entries the seven per-family dicts
+# already hold between them, just merged into one dict, which is the OVERALL
+# figure summing the per-family ones (1227 total combinations either way).
+# Storing that sum a second time at the overall level is a pure duplicate: it
+# carries strictly less information than the per-family breakdown, since it
+# cannot say WHICH family_definition a mislabel landed in, only that
+# something moved, and the per-family breakdown is what makes this pin
+# diagnostic rather than merely a tripwire. Every one of the label-multiset
+# bite tests below still fails via the per-family_definition check alone;
+# none of them relied on an overall-level label check.
+
+# Columns whose per-row VALUE this pin protects by counting how often each
+# combination occurs, per family_definition and over the whole file, closing
+# the gap the value-column aggregates above cannot: they never read these
+# columns at all, so a mislabel on any of them moves nothing above.
+#
+# The rule is simple rather than a hand-picked subset, because a hand-picked
+# subset is exactly the wrong shape here: EVERY column of
+# results/family_sensitivity.csv that is an identifier or a label, rather
+# than a computed statistical output, is included. That is family_key, scope,
+# source, k, broker_count, ablation, cell_is_stamped_not_native, metric,
+# test_id and is_headline_72; every other column (family_size,
+# n_families_in_definition, degenerate, p_uncorrected, p_holm, p_bh,
+# survives_holm_alpha05, survives_bh_alpha05, alpha, n_headline_tests,
+# n_headline_surviving_holm, n_headline_surviving_bh,
+# worst_headline_p_uncorrected, worst_headline_p_holm, worst_headline_p_bh,
+# bonferroni_alpha_over_family_size, notes) is either a computed statistic
+# already covered above (degenerate and the three p-value columns, via the
+# counts/extremes/log-sums), a family_summary-only aggregate already covered
+# by the claim-bearing subset's own pinned fields (n_headline_tests and its
+# neighbours), a constant setting (alpha), free text (notes), or itself the
+# grouping key (family_definition; a row's family_definition changing to
+# another EXISTING family_definition already shows up as a changed n_rows on
+# both the losing and the gaining group, so it needs no separate label
+# check). None of the ten included columns turned out, on inspection, to be
+# a computed output masquerading as a label; all ten are genuine identifiers
+# or labels (verified: none is constant, all vary per row where the
+# underlying design varies, k and broker_count and ablation and metric and
+# is_headline_72 are the sweep's own design coordinates, family_key/scope/
+# source/cell_is_stamped_not_native are provenance labels, and test_id is the
+# row's own name).
+#
+# Including test_id pushes this multiset close to one entry per row (313
+# distinct values across 1227 rows): that is deliberate, not an accident to
+# be trimmed back. With test_id included, the multiset becomes a complete
+# row-identity pin on every label column, with the six value columns already
+# pinned in aggregate (counts and extremes) and by log-sum, so the combined
+# rule an examiner can check in one sentence is: every label is pinned
+# exactly, every value column is pinned in aggregate, and the only remaining
+# gap is a value change that exactly preserves its family's log-sum (see the
+# module docstring's own statement of that residual limit).
+#
+# This multiset is computed and pinned PER family_definition ONLY, not also
+# at the overall (whole-file) level; see the comment above
+# FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS for why (the overall figure
+# would be the identical 1227 entries a second time, derivable by summing the
+# seven per-family dicts, and strictly less diagnostic than they are since it
+# cannot say which family a mislabel landed in).
+LABEL_COMBO_COLUMNS = (
+    "family_key",
+    "scope",
+    "source",
+    "k",
+    "broker_count",
+    "ablation",
+    "cell_is_stamped_not_native",
+    "metric",
+    "test_id",
+    "is_headline_72",
+)
+
+
+def _label_combo_key(row) -> str:
+    """One canonical, collision-free string key for a row's combination of
+    LABEL_COMBO_COLUMNS values. Reuses _identity_token so a missing value
+    (metric/ablation/is_headline_72 on a family_summary row) collapses to the
+    same _MISSING_TOKEN used everywhere else in this module, rather than a
+    third, ad hoc representation of "empty".
+    """
+    return "|".join(f"{column}={_identity_token(row[column])}" for column in LABEL_COMBO_COLUMNS)
+
+
+def _label_combo_counts(group) -> dict:
+    """value_counts over LABEL_COMBO_COLUMNS, as a plain dict: key -> count.
+
+    Twin of the same-named function in scripts/regenerate_golden_master.py;
+    must compute identically or the golden snapshot stops describing what
+    this checks. An exact dict of ints, not a tolerance-based comparison:
+    there is no floating-point noise in a row count, so nothing is gained by
+    loosening it, and pytest.approx would not even apply to a dict.
+    """
+    counts: dict = {}
+    for _, row in group.iterrows():
+        key = _label_combo_key(row)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _assert_label_counts_match_golden(actual_counts: dict, expected_counts: dict, context: str) -> None:
+    if actual_counts == expected_counts:
+        return
+    added = sorted(set(actual_counts) - set(expected_counts))
+    removed = sorted(set(expected_counts) - set(actual_counts))
+    changed = {
+        key: {"expected": expected_counts[key], "actual": actual_counts[key]}
+        for key in sorted(set(actual_counts) & set(expected_counts))
+        if actual_counts[key] != expected_counts[key]
+    }
+    raise AssertionError(
+        f"{context}: label combination counts changed (added={added}, removed={removed}, changed={changed})"
+    )
+
 
 # The row-keyed pinned CSVs that are pinned WHOLE, each with the number of
 # p-value columns its header actually carries. Pinned as a count rather than a
@@ -1075,15 +1225,20 @@ def _family_sensitivity_aggregate_row(group) -> dict:
         values = group[column].dropna()
         row[f"sum_log10_{column}"] = float(sum(_log10_with_floor(float(value)) for value in values))
         row[f"n_at_floor_{column}"] = int((values <= P_VALUE_LOG_FLOOR).sum())
+    row["label_counts"] = _label_combo_counts(group)
     return row
 
 
 def _assert_family_sensitivity_aggregates_match_golden(df, golden: dict) -> None:
     """Whole-file aggregate guard over all 1227 rows (see
-    FAMILY_SENSITIVITY_AGGREGATE_FIELDS's comment above for the rationale):
-    counts and p-value extrema, per family_definition and over the whole
-    file, so a regression anywhere outside the eight individually pinned rows
-    still fails here even though it is not itself value-pinned.
+    LABEL_COMBO_COLUMNS's comment above for exactly what is and is not
+    covered): counts and p-value extrema on the six value columns and the
+    log-magnitude sums, at BOTH the overall level and per family_definition;
+    the identity-adjacent label multiset, PER family_definition ONLY (see
+    FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS's comment above for why the
+    overall level would be a pure duplicate of the per-family breakdown). A
+    regression anywhere outside the eight individually pinned rows still
+    fails here even though it is not itself value-pinned.
     """
     label = "results/family_sensitivity.csv aggregates"
     aggregates = golden["aggregates"]
@@ -1093,6 +1248,10 @@ def _assert_family_sensitivity_aggregates_match_golden(df, golden: dict) -> None
     overall_actual["n_distinct_test_ids"] = int(df["test_id"].nunique())
     for field, kind in FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS.items():
         _assert_pinned_field(overall_actual, aggregates["overall"], field, kind, f"{label}: overall")
+    # No overall-level label_counts check: deliberately not stored (see the
+    # comment above FAMILY_SENSITIVITY_OVERALL_AGGREGATE_FIELDS). The
+    # per-family_definition check below is where every label-multiset
+    # regression is actually caught.
 
     expected_by_family = aggregates["by_family_definition"]
     assert set(df["family_definition"].unique()) == set(expected_by_family.keys()), (
@@ -1104,6 +1263,7 @@ def _assert_family_sensitivity_aggregates_match_golden(df, golden: dict) -> None
         context = f"{label}: {family_definition}"
         for field, kind in FAMILY_SENSITIVITY_AGGREGATE_FIELDS.items():
             _assert_pinned_field(actual_group, expected_group, field, kind, context)
+        _assert_label_counts_match_golden(actual_group["label_counts"], expected_group["label_counts"], context)
 
 
 def _assert_family_sensitivity_matches_golden(df, golden: dict) -> None:
@@ -2834,7 +2994,7 @@ def test_family_sensitivity_log_sum_bites_on_a_mid_distribution_p_value_shift_th
     group_max = float(group["p_holm"].max())
     # Neither the group's minimum nor its maximum: this is a genuinely
     # mid-distribution value, and the shift below stays clear of both.
-    assert original == pytest.approx(5.541809e-10, rel=1e-6)
+    assert original == pytest.approx(5.541809e-10, rel=1e-6, abs=0.0)
     assert original > group_min * 1e6 and original < group_max / 1e6
 
     perturbed_to = original * 1e5  # five orders of magnitude, same sign, still << 1
@@ -2866,6 +3026,132 @@ def test_family_sensitivity_log_sum_bites_on_a_mid_distribution_p_value_shift_th
     # The log-sum, and only the log-sum, catches it.
     with pytest.raises(AssertionError):
         _assert_family_sensitivity_matches_golden(moved, golden)
+
+    assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+_LABEL_ONLY_UNAFFECTED_FIELDS = tuple(FAMILY_SENSITIVITY_AGGREGATE_FIELDS.keys())
+
+
+def _assert_only_label_counts_moved(actual_group: dict, golden_group: dict, context: str) -> None:
+    """Assert every value-column field (counts, extremes, log-sums) still
+    matches the untouched golden aggregate, so a test using this helper
+    documents, by construction, that the perturbation it applies is invisible
+    to everything except the label multiset.
+    """
+    for field in _LABEL_ONLY_UNAFFECTED_FIELDS:
+        assert actual_group[field] == golden_group[field], (
+            f"{context}: {field} changed; this perturbation was supposed to touch only a label column"
+        )
+
+
+def test_family_sensitivity_label_multiset_bites_on_metric_ablation_and_is_headline_72_mislabels():
+    """The gap an adversarial review reproduced three separate ways against
+    an earlier version of this module: a relabelled metric, a swapped
+    ablation, and a flipped is_headline_72, each on a row OUTSIDE the eight
+    individually pinned, each passing every value-column aggregate above
+    (counts, extremes, log-sums are all unchanged, asserted explicitly below,
+    not merely claimed) because none of those aggregates ever reads metric,
+    ablation or is_headline_72 at all. Only the label multiset sees any of
+    the three. Each of the three mirrors the reviewer's own reproduction
+    exactly: mislabelled.loc[target, "metric"] = "SWAPPED_WRONG_METRIC_LABEL",
+    swapped.loc[target3, "ablation"] = "capacity_pricing_only", and
+    flipped.loc[target2, "is_headline_72"] = not before_val.
+
+    A fourth part, added after a follow-up review found the first version of
+    this multiset was itself a hand-picked subset of label columns: a
+    mislabelled source on a monopoly_supplement row, proving the now-complete
+    "every identifier or label column" rule catches a column that earlier
+    version left out on purpose.
+    """
+    _skip_unless_pinned_csv_available(FAMILY_SENSITIVITY_CSV_PATH, FAMILY_SENSITIVITY_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(FAMILY_SENSITIVITY_CSV_PATH)
+    golden = _load_golden(FAMILY_SENSITIVITY_GOLDEN_PATH)
+    df = pd.read_csv(FAMILY_SENSITIVITY_CSV_PATH)
+
+    _assert_family_sensitivity_matches_golden(df, golden)  # unperturbed: passes
+
+    pinned_keys = set(FAMILY_SENSITIVITY_PINNED_ROW_KEYS)
+
+    # (a) a metric relabelled, mirroring the reviewer's own repro exactly.
+    family_definition = "F2_main_sweep_with_degenerates_180"
+    test_id = "main|k=0.5|bc=2|capacity_both|avg_cost_per_agent_eur"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+
+    mislabelled = df.copy(deep=True)
+    mislabelled.loc[target, "metric"] = "SWAPPED_WRONG_METRIC_LABEL"
+    group = mislabelled[mislabelled["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"metric mislabel: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(mislabelled, golden)
+
+    # (b) an ablation swapped, mirroring the reviewer's own repro exactly.
+    family_definition = "F5_everything_pooled"
+    test_id = "main|k=1.5|bc=3|capacity_both|load_concentration_hhi"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+    assert df.loc[target[0], "ablation"] == "capacity_both", "expected a real ablation change, not a no-op swap"
+
+    swapped = df.copy(deep=True)
+    swapped.loc[target, "ablation"] = "capacity_pricing_only"
+    group = swapped[swapped["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"ablation swap: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(swapped, golden)
+
+    # (c) is_headline_72 flipped, mirroring the reviewer's own repro exactly.
+    family_definition = "F7_everything_pooled_with_degenerates"
+    test_id = "main|k=2|bc=5|capacity_both|prosumer_self_sufficiency"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+    before_val = bool(df.loc[target[0], "is_headline_72"])
+
+    flipped = df.copy(deep=True)
+    flipped.loc[target, "is_headline_72"] = not before_val
+    group = flipped[flipped["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"is_headline_72 flip: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(flipped, golden)
+
+    # (d) source mislabelled, on a monopoly_supplement row: the column a
+    # follow-up review found the first version of this fix left out on
+    # purpose, without a principled reason to leave it out.
+    family_definition = "F4_pooled_with_monopoly"
+    test_id = "monopoly|k=0.5|bc=1|capacity_pricing_only|feeder_coefficient_of_variation"
+    assert (family_definition, test_id) not in pinned_keys
+    target = df.index[(df["family_definition"] == family_definition) & (df["test_id"] == test_id)]
+    assert len(target) == 1
+    assert df.loc[target[0], "source"] == "monopoly_supplement", "expected a real source change, not a no-op"
+
+    source_mislabelled = df.copy(deep=True)
+    source_mislabelled.loc[target, "source"] = "SWAPPED_WRONG_SOURCE_LABEL"
+    group = source_mislabelled[source_mislabelled["family_definition"] == family_definition]
+    _assert_only_label_counts_moved(
+        _family_sensitivity_aggregate_row(group),
+        golden["aggregates"]["by_family_definition"][family_definition],
+        f"source mislabel: {family_definition}",
+    )
+    with pytest.raises(AssertionError):
+        _assert_family_sensitivity_matches_golden(source_mislabelled, golden)
 
     assert _sha256(FAMILY_SENSITIVITY_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
 
