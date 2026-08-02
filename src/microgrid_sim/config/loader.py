@@ -101,6 +101,9 @@ _CAPACITY_MECHANISM_FRACTION_KEYS = ("deferrable_fraction", "payback_cap_fractio
 # capacity_mechanism block written before this arm existed stays valid; absent
 # means "proportional", the original, unchanged surcharge split.
 _CAPACITY_SURCHARGE_MODES = ("proportional", "synchronized", "renormalized")
+# D11: dose-matched monopoly arm control (docs/DECISIONS.md D11). Optional,
+# same reason as capacity_surcharge_mode above: absent means None, "use the
+# actual active broker count", the shipped behaviour.
 
 
 class ConfigError(ValueError):
@@ -280,4 +283,11 @@ def _validate_capacity_mechanism(config: dict) -> None:
         if mode not in _CAPACITY_SURCHARGE_MODES:
             raise ConfigError(
                 f"capacity_mechanism.capacity_surcharge_mode must be one of {_CAPACITY_SURCHARGE_MODES}, got {mode!r}"
+            )
+
+    if "capacity_surcharge_divisor" in capacity:
+        divisor = capacity["capacity_surcharge_divisor"]
+        if divisor is not None and (isinstance(divisor, bool) or not isinstance(divisor, int) or divisor < 1):
+            raise ConfigError(
+                f"capacity_mechanism.capacity_surcharge_divisor must be None or an int >= 1, got {divisor!r}"
             )
