@@ -252,14 +252,16 @@ def build_run_config(
     seed: int,
     horizon_hours: int = HORIZON_HOURS,
     surcharge_mode: str = "proportional",
+    surcharge_divisor: int | None = None,
 ) -> dict:
     """Build one run's config: deepcopy the base config, then override only
     simulation.seed, simulation.horizon_hours, capacity_mechanism.{enabled,
-    feedback_pnl, feedback_pricing, k, window, capacity_surcharge_mode}, and
-    brokers. Nothing else is touched, so num_agents and every structural
-    coefficient stay at the config/default.yaml value (D8: "no parameter
-    other than k, broker_count, and the ablation flags varies across the
-    sweep"; D10 adds capacity_surcharge_mode as the one further axis).
+    feedback_pnl, feedback_pricing, k, window, capacity_surcharge_mode,
+    capacity_surcharge_divisor}, and brokers. Nothing else is touched, so
+    num_agents and every structural coefficient stay at the config/default.yaml
+    value (D8: "no parameter other than k, broker_count, and the ablation
+    flags varies across the sweep"; D10 adds capacity_surcharge_mode and D11
+    adds capacity_surcharge_divisor as further axes).
     """
     if ablation not in ABLATION_FLAGS:
         raise ValueError(f"unknown ablation: {ablation}")
@@ -278,6 +280,10 @@ def build_run_config(
     capacity_cfg["k"] = k
     capacity_cfg["window"] = WINDOW_HOURS
     capacity_cfg["capacity_surcharge_mode"] = surcharge_mode
+    # D11: written unconditionally, including the None case, so a run config
+    # built by this function is always explicit about the divisor rather than
+    # silently inheriting whatever base_config happened to carry.
+    capacity_cfg["capacity_surcharge_divisor"] = surcharge_divisor
 
     config["brokers"] = _build_broker_list(base_config["brokers"], broker_count, seed)
     return config

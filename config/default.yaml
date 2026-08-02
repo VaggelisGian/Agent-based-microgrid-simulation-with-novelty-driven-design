@@ -89,6 +89,15 @@ capacity_mechanism:
   # contribution share; "synchronized" and "renormalized" are analysis-only
   # controls, see docs/DECISIONS.md D10.
   capacity_surcharge_mode: proportional
+  # D11: dose-matched monopoly arm control. null means "use the actual active
+  # broker count" (the shipped behaviour, bit for bit); set to an integer M to
+  # evaluate the pricing channel as though the broker count were M, so a
+  # broker_count-1 monopolist can be dosed at passthrough/M instead of the
+  # full passthrough its share of 1 would otherwise hand it. Used only by the
+  # D11 dose-matched monopoly arm (scripts/run_dose_matched_monopoly.py); it
+  # is an artificial analysis-only control with no market interpretation, see
+  # docs/DECISIONS.md D11.
+  capacity_surcharge_divisor: null
   # D7: reference surcharge magnitude (EUR/kWh) against which an agent's own
   # broker surcharge is compared (clipped to [0, 1]) to size how much of its
   # deferrable demand actually gets deferred this hour; a representative
