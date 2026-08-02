@@ -37,7 +37,7 @@ answer which channel does the work, which the main sweep already settled and
 this arm does not revisit. The 180 capacity_disabled rows are run rather than
 assumed inert, even though the pricing channel is off under them and the
 divisor is therefore provably inert there: they cost little and turn a
-construction argument into a measurement (see docs/test_surcharge_divisor.py
+construction argument into a measurement (see tests/test_surcharge_divisor.py
 and docs/DECISIONS.md D11's guardrails).
 
 Reused, not re-run: divisor-equivalent-to-1 is the existing monopoly arm at

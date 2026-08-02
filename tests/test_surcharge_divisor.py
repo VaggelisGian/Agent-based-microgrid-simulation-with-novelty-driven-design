@@ -357,11 +357,16 @@ def test_disabled_and_pnl_only_are_byte_for_byte_identical_across_all_divisors(a
         model = models[divisor]
         assert model.feeder_net_import_history == reference.feeder_net_import_history, divisor
         assert model.compute_metrics() == reference_metrics, divisor
+        # Exact equality, not a tolerance. The test's own name promises byte
+        # for byte, and the ledgers do hold to that: an adversarial review
+        # re-ran this scenario across extra seeds, broker counts and divisors
+        # (including 1 and 1000) with == and found no deviation anywhere. A
+        # tolerance here would have been looser than the claim above it.
         total_charge = sum(broker.cumulative_capacity_charge_eur for broker in model.brokers.values())
-        assert total_charge == pytest.approx(reference_total_charge, abs=1e-9), divisor
+        assert total_charge == reference_total_charge, divisor
         for broker_id, broker in model.brokers.items():
             reference_broker = reference.brokers[broker_id]
-            assert broker.cumulative_revenue_eur == pytest.approx(reference_broker.cumulative_revenue_eur, abs=1e-9)
+            assert broker.cumulative_revenue_eur == reference_broker.cumulative_revenue_eur, (broker_id, divisor)
 
 
 # ---------------------------------------------------------------------------
