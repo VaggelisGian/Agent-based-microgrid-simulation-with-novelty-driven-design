@@ -425,22 +425,26 @@ def determine_verdict(gradient_tests: list[dict]) -> tuple[str, dict]:
             "pre-registered rule this fires the FIRST branch: the channel behind the peak-to-average "
             "improvement is deferred VOLUME, not desynchronized timing, because synchronized removes all "
             "cross-broker variation (nothing left to desynchronize) yet the gradient survives anyway. "
-            "The thesis's current desynchronization claim is NOT supported by this control and should be "
-            "revised toward a volume-based explanation."
+            "This control refutes the desynchronization account, and the thesis's explanation is the "
+            "volume-based one, revised in response to this arm."
         )
     elif overall_branch == "WEAKENS_VANISHES_UNDER_SYNCHRONIZED_SURVIVES_UNDER_RENORMALIZED":
         verdict = (
             "D10 VERDICT: the broker-count gradient in peak-to-average ratio WEAKENS/VANISHES under "
             "synchronized while SURVIVING under renormalized, at every tested k. Per D10's pre-registered "
             "rule this fires the SECOND branch: desynchronization is the channel behind the gradient. This "
-            "supports the thesis's current desynchronization claim."
+            "branch does not fire on the shipped grid; if it ever fires on a different one, it contradicts "
+            "the volume-based explanation the thesis gives for the gradient, and on that grid the "
+            "volume-based explanation would have to be withdrawn and a timing-based one put in its place."
         )
     else:
         verdict = (
             "D10 VERDICT: the pattern does not fit either pre-registered clean branch cleanly at every k "
             "(see the per-k breakdown below) -- reported as observed, per D10's own instruction for this "
-            "case. The desynchronization claim is downgraded to match: it cannot be asserted as established "
-            "on this evidence alone."
+            "case. On such a pattern this arm establishes no channel at all, so the volume-based "
+            "explanation the thesis gives for the gradient would have to be stated as unresolved on that "
+            "grid rather than as controlled for: the control built to separate deferred volume from "
+            "deferral timing would not have separated them there."
         )
 
     full_text = verdict + " Per-k detail: " + " | ".join(lines)
