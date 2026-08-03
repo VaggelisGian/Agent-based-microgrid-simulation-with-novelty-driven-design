@@ -2,11 +2,13 @@
 
 Covers the CapacityMechanism.step() substitution directly (proportional,
 synchronized, renormalized), the no-op guarantee when the divisor is absent
-or None, the loader's validation of the new optional config key, and three
-model-level guarantees D11 requires: the divisor is inert wherever the
-mechanism already is (capacity_disabled, capacity_pnl_only), the P&L channel
-(allocations_eur) never depends on it, and it touches no seeded RNG draw. See
-docs/DECISIONS.md D11 for the full substitution rule this file pins.
+or None, the loader's validation of the new optional config key, the net-export
+zero floor in the divisor copies of those formulas (section (e2); the
+no-divisor copies are pinned in tests/test_capacity.py), and three model-level
+guarantees D11 requires: the divisor is inert wherever the mechanism already is
+(capacity_disabled, capacity_pnl_only), the P&L channel (allocations_eur) never
+depends on it, and it touches no seeded RNG draw. See docs/DECISIONS.md D11 for
+the full substitution rule this file pins.
 """
 
 import copy
@@ -187,6 +189,69 @@ def test_synchronized_under_divisor_ignores_actual_broker_count(n):
     expected = passthrough / divisor
     for broker_id in contributions:
         assert result.surcharges_eur_per_kwh[broker_id] == expected
+
+
+# ---------------------------------------------------------------------------
+# (e2) the net-export zero floor, WITH a divisor set.
+#
+# capacity.py's proportional branch is written twice, once for the no-divisor
+# case and once for the divisor case, and only the first of the two was
+# pinned against a net exporter (tests/test_capacity.py's
+# test_allocations_sum_to_total_charge_when_positive_contribution_exists,
+# which uses the default divisor). An external mutation-testing pass applied
+# the same positive_contrib-to-raw-signed swap to the DIVISOR copy of the
+# formula and the whole suite passed: nothing in this file had ever fed a net
+# exporter, so the second copy of the clip was unpinned. These tests close
+# that.
+#
+# All three modes are covered because the divisor splits them differently:
+# proportional and renormalized floor the contribution at zero (max(0.0,
+# value)) and so exclude a net exporter outright, while synchronized assigns
+# a constant without reading any contribution and so includes it, at
+# passthrough / divisor rather than passthrough / N. Pinning only the zeros
+# would leave the one branch whose divisor variant CHANGES the answer for a
+# net exporter unpinned.
+# ---------------------------------------------------------------------------
+
+# A net exporter, a zero contributor and two real ones, so the firing step has
+# a positive contribution pool to divide and a strictly negative member to
+# exclude from it.
+NET_EXPORT_CONTRIBUTIONS = {"a": 50.0, "b": 30.0, "zero": 0.0, "exporter": -10.0}
+
+
+@pytest.mark.parametrize("mode", ("proportional", "renormalized"))
+@pytest.mark.parametrize("divisor", (2, 3, 5))
+def test_net_exporter_is_floored_at_zero_under_a_divisor(mode, divisor):
+    """Exactly 0.0, not approximately: the floor is a multiplication by a
+    clipped-to-zero contribution, so any nonzero answer means the clip is
+    gone, not that it rounded. A raw-signed mutant gives this broker a
+    NEGATIVE surcharge, which would be a scarcity signal paying an exporter
+    to import."""
+    result = _fired_mechanism(mode, NET_EXPORT_CONTRIBUTIONS, divisor=divisor, passthrough=0.3)
+    assert result.total_charge_eur > 0.0
+    assert result.surcharges_eur_per_kwh["exporter"] == 0.0
+    assert result.surcharges_eur_per_kwh["zero"] == 0.0
+    assert result.surcharges_eur_per_kwh["a"] > 0.0
+    # The P&L channel excludes it too, on the same clip, divisor or not.
+    assert result.allocations_eur["exporter"] == 0.0
+
+
+@pytest.mark.parametrize("divisor", (2, 3, 5))
+def test_synchronized_under_a_divisor_still_includes_a_net_exporter(divisor):
+    """The divisor variant of synchronized, at the same net-export input: the
+    equal share is passthrough / divisor rather than passthrough / N, and the
+    net exporter receives it like everyone else, because this branch never
+    consults a contribution value and therefore has no clip to exclude it
+    with."""
+    passthrough = 0.3
+    result = _fired_mechanism("synchronized", NET_EXPORT_CONTRIBUTIONS, divisor=divisor, passthrough=passthrough)
+    assert result.total_charge_eur > 0.0
+    expected = passthrough / divisor
+    for broker_id in NET_EXPORT_CONTRIBUTIONS:
+        assert result.surcharges_eur_per_kwh[broker_id] == expected
+    # And the divisor really is what set it: with four brokers, the shipped
+    # no-divisor answer would be passthrough / 4, which none of 2, 3 or 5 is.
+    assert expected != passthrough / len(NET_EXPORT_CONTRIBUTIONS)
 
 
 # ---------------------------------------------------------------------------

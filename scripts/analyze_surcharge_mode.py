@@ -72,8 +72,17 @@ principle, and a later mutation-testing pass over the test suite found the gap i
 left open: the six gradient statistics this package's own headline sentences quote
 (docs/DECISIONS.md's "D10 result" and 06_results.md Section 6.9's "-7.93 and -8.37
 percentage points... at p_holm 8.4e-28 and 8.3e-15" for synchronized, and the
-renormalized figures alongside them) were reproducible only by re-running this
-script, in no artifact at all. The constraint is lifted from here on: the six
+renormalized figures alongside them) sat in no machine-readable column anywhere.
+Two numbers per test, the gradient in percentage points and its Holm-corrected
+p-value, did survive as PROSE at 3 to 4 significant figures inside the notes
+string this script already wrote on all 18 rows ("synchronized -7.934 pp
+(p_holm=8.36e-28, sig=True)", and the -8.367 / 8.34e-15 pair at the other k),
+which is exactly where the thesis sentences above were read off; the rest
+(pct_at_bc2, pct_at_bc5, dz, p_uncorrected and p_bh) had no home of any kind. An
+earlier draft of this paragraph said the statistics were "reproducible only by
+re-running this script, in no artifact at all". The second half of that was wrong,
+and contradicted this docstring's own description of the notes column a dozen
+lines above it. The constraint is lifted from here on: the six
 gradient tests compute_gradient_tests() computes are now ALSO written as CSV rows,
 under scope="gradient_bc2_to_bc5" (see build_gradient_table() below), distinct from
 the 18 rows' scope="mode_cell". The 18 mode_cell rows are unchanged in every field
