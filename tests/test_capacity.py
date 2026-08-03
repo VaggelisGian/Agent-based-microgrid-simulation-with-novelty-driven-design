@@ -7,6 +7,8 @@ import statistics
 
 import pytest
 
+from microgrid_sim.agents.consumer import Consumer
+from microgrid_sim.brokers.base import Broker
 from microgrid_sim.config.loader import ConfigError, load_config, validate_config
 from microgrid_sim.environment.capacity import CapacityMechanism
 from microgrid_sim.environment.model import MicrogridModel
@@ -587,3 +589,166 @@ def test_total_deferred_kwh_audit_is_positive_under_pricing_and_zero_otherwise()
     assert pnl_only.total_deferred_kwh == 0.0
     assert pricing_only.total_deferred_kwh > 0.0
     assert both.total_deferred_kwh > 0.0
+
+
+def test_capacity_pricing_only_never_debits_any_broker_ledger():
+    """Phase 20 (20.1, mutant B): model.py step 5's `if self.capacity_feedback_pnl:`
+    gate must keep capacity_pricing_only's P&L channel silent. Chapter 4
+    Section 4.6 states plainly that under capacity_pricing_only "broker
+    ledgers are never debited by the scarcity charge itself"; nothing else in
+    this suite pins that sentence; test_capacity_pnl_only_reproduces_plain_
+    baseline_byte_for_byte above only ever exercises the OTHER ablation
+    (feedback_pnl True, feedback_pricing False). A test that never confirms
+    the charge actually fires would pass vacuously (a mechanism that never
+    levies anything also never debits anything), so capacity_fire_rate > 0.0
+    is asserted first, then every broker's ledger is pinned at exactly 0.0."""
+    horizon = 500
+    config = _load_ablation("capacity_pricing_only", horizon=horizon, num_agents=90, seed=5)
+    model = _run(config, horizon)
+    metrics = model.compute_metrics()
+
+    assert metrics.capacity_fire_rate > 0.0, "construction should produce at least some excess hours"
+    for broker in model.brokers.values():
+        assert broker.cumulative_capacity_charge_eur == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 20 (20.1, mutant A): model.py's capacity block, inside
+# `if self.capacity_enabled:`, groups a step's broker_contributions_kwh by
+# agent.last_broker_id, not by agent.broker.id. The two differ only for an
+# agent that switches broker during its OWN step() call: last_broker_id is
+# captured in Consumer.step() before the tail-of-step switching logic can
+# move self.broker (see agents/consumer.py), so it records the broker that
+# actually served (and billed) the agent this hour, while self.broker.id may
+# already point at next hour's broker by the time MicrogridModel.step reads
+# it. A test that only checks contributions sum to the feeder total cannot
+# tell the two apart (the sum is identical either way); the fixtures below
+# instead construct a single-step switch and read the resulting PER-BROKER
+# capacity-charge split off the real broker ledgers.
+#
+# broker_count 2 (regulated_utility + volatile_low_cost, no premium_green) is
+# used deliberately, mirroring BROKER_COUNTS's bc=2 cell in
+# scripts/run_sensitivity_sweep.py: Phase 19's mutation-testing pass reported
+# this exact mutant LIVE at broker_count 2, where switching is frequent (mean
+# 21.37% of agents over the D8 sweep, docs/thesis/defense_slides.md Slide 13),
+# and INERT at the broker_count 3 headline cell.
+# ---------------------------------------------------------------------------
+
+
+class _FixedPriceBroker(Broker):
+    """Deterministic-price test double: quote() always returns the same fixed
+    price, so a switching decision here depends only on the constructed
+    scenario below, never on the real regulated_utility/volatile_low_cost
+    brokers' seasonal or stochastic price dynamics."""
+
+    def __init__(self, broker_id, price, greenness=0.5):
+        super().__init__(broker_id, broker_id, "stub", greenness)
+        self._price = price
+
+    def quote(self, hour, context=None):
+        self._record_price(self._price)
+        return self._price
+
+
+def _bc2_stub_model(horizon, capacity_overrides):
+    """A broker_count-2 model (regulated_utility + volatile_low_cost ids,
+    matching the real bc=2 sweep cell) with num_agents forced to 0 so agents
+    can be attached by hand, and the two real brokers swapped for
+    _FixedPriceBroker doubles reusing their real ids -- broker_surcharges and
+    _surcharge_accum are both built keyed off self.brokers during __init__,
+    before this swap, so reusing the same ids keeps them consistent."""
+    config = load_config("config/default.yaml")
+    config = copy.deepcopy(config)
+    config["simulation"]["horizon_hours"] = horizon
+    config["simulation"]["seed"] = 1
+    config["population"]["num_agents"] = 0
+    config["brokers"] = [b for b in config["brokers"] if b["type"] in ("regulated_utility", "volatile_low_cost")]
+    config["capacity_mechanism"] = {
+        "enabled": True,
+        "feedback_pnl": False,
+        "feedback_pricing": False,
+        "window": 2,
+        "k": 0.0,
+        "charge_rate_eur_per_kwh": 1.0,
+        "capacity_passthrough": 0.1,
+        "response_reference_eur_per_kwh": 0.05,
+        # Deliberately 0.0: the demand-deferral channel (D7) is a separate
+        # concern from this mutant, and deferrable_fraction 0.0 makes
+        # _apply_demand_deferral inert regardless of the surcharge value, so
+        # feeder_net_import here stays exactly the hand-set demand_profile,
+        # not perturbed by whatever surcharge this scenario also produces.
+        "deferrable_fraction": 0.0,
+        "payback_cap_fraction": 0.0,
+    }
+    config["capacity_mechanism"].update(capacity_overrides)
+    model = MicrogridModel(config)
+    regulated = _FixedPriceBroker("regulated_utility", price=0.30)
+    volatile = _FixedPriceBroker("volatile_low_cost", price=0.05)
+    model.brokers["regulated_utility"] = regulated
+    model.brokers["volatile_low_cost"] = volatile
+    return model, regulated, volatile
+
+
+def test_capacity_attributes_a_same_step_switcher_to_the_broker_that_served_it():
+    """See the module-level note above this fixture for the mutant this
+    kills. Two agents, three hours, window=2, k=0.0:
+
+    Hours 0-1: demand_profile = 1.0 for both agents (feeder 2.0 each hour),
+    filling the rolling window with no excess (mean == the just-observed
+    value both times), so no charge is levied yet.
+
+    Hour 2: demand_profile spikes to 5.0 for both agents (feeder 10.0);
+    window = [2.0, 10.0], mean = threshold = 6.0 (k=0), excess = 4.0, total
+    charge = 4.0 EUR (charge_rate 1.0). "switcher" has breached its own 0.25
+    tolerance against "regulated"'s fixed 0.30 price for 3 consecutive hours
+    (sustained_breach_hours=3), so it reconsiders and switches to "volatile"
+    (0.05) inside this SAME step() call, after last_broker_id has already
+    been captured as "regulated_utility" for this hour. "anchor" stays on
+    "volatile" throughout (its tolerance never breaches), giving "volatile" a
+    genuine contribution of its own to split against.
+
+    Shipped code (last_broker_id): regulated served 5.0 kWh, volatile served
+    5.0 kWh this hour -> allocations split 50/50, regulated gets 2.0 EUR,
+    volatile gets 2.0 EUR.
+    Mutant (agent.broker.id): switcher's kWh is attributed to volatile (its
+    NEW broker) instead -> regulated gets 0.0 EUR, volatile gets 4.0 EUR.
+    """
+    model, regulated, volatile = _bc2_stub_model(horizon=3, capacity_overrides={"feedback_pnl": True})
+    model.demand_profile[:3] = [1.0, 1.0, 5.0]
+
+    switcher = Consumer(
+        model,
+        profile="price_sensitive",
+        demand_scale=1.0,
+        price_tolerance_eur_per_kwh=0.25,
+        volatility_tolerance_eur_per_kwh=0.05,
+        greenness_threshold=0.5,
+        switching_penalty_eur_per_kwh=0.0,
+        sustained_breach_hours=3,
+        initial_broker=regulated,
+    )
+    anchor = Consumer(
+        model,
+        profile="price_sensitive",
+        demand_scale=1.0,
+        price_tolerance_eur_per_kwh=1.0,  # 0.05 (volatile's price) never breaches this
+        volatility_tolerance_eur_per_kwh=0.05,
+        greenness_threshold=0.5,
+        switching_penalty_eur_per_kwh=0.0,
+        sustained_breach_hours=3,
+        initial_broker=volatile,
+    )
+
+    for _ in range(3):
+        model.step()
+
+    # Sanity: the constructed scenario actually exercises what the docstring
+    # claims, before trusting the ledger assertions below.
+    assert switcher.switch_count == 1
+    assert switcher.broker is volatile
+    assert switcher.last_broker_id == "regulated_utility"
+    assert anchor.broker is volatile
+    assert anchor.last_broker_id == "volatile_low_cost"
+
+    assert regulated.cumulative_capacity_charge_eur == pytest.approx(2.0, abs=1e-9)
+    assert volatile.cumulative_capacity_charge_eur == pytest.approx(2.0, abs=1e-9)
