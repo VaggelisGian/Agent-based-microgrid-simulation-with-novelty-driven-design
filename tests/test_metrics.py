@@ -2,6 +2,7 @@ import copy
 
 import pytest
 
+from microgrid_sim.agents.consumer import Consumer
 from microgrid_sim.brokers.base import Broker
 from microgrid_sim.config.loader import load_config
 from microgrid_sim.environment import metrics
@@ -157,3 +158,95 @@ def test_avg_cost_per_kwh_uses_net_energy_scope_consistently_with_net_revenue():
     assert result.avg_cost_per_kwh_eur != pytest.approx(old_style_value, rel=1e-9)
     # Exact-value pin (F8), fixed seed/horizon/population.
     assert result.avg_cost_per_kwh_eur == pytest.approx(0.17435024676820962, abs=1e-9)
+
+
+def _bc2_config_for_audit(horizon, capacity_overrides):
+    """A broker_count-2 config (regulated_utility + volatile_low_cost) with
+    num_agents forced to 0, so a single hand-built Consumer can be attached
+    for full control over feeder_net_import_kwh via model.demand_profile."""
+    config = load_config("config/default.yaml")
+    config = copy.deepcopy(config)
+    config["simulation"]["horizon_hours"] = horizon
+    config["simulation"]["seed"] = 1
+    config["population"]["num_agents"] = 0
+    config["brokers"] = [b for b in config["brokers"] if b["type"] in ("regulated_utility", "volatile_low_cost")]
+    config["capacity_mechanism"] = {
+        "enabled": True,
+        "feedback_pnl": False,
+        "feedback_pricing": False,
+        "window": 2,
+        "k": 0.0,
+        "charge_rate_eur_per_kwh": 1.0,
+        "capacity_passthrough": 0.1,
+        "response_reference_eur_per_kwh": 0.05,
+        "deferrable_fraction": 0.0,  # inert deferral: feeder stays exactly the hand-set demand
+        "payback_cap_fraction": 0.0,
+    }
+    config["capacity_mechanism"].update(capacity_overrides)
+    return config
+
+
+def test_compute_capacity_audit_divides_mean_surcharge_by_surcharge_steps():
+    """Phase 20 (20.1, mutant C): environment/metrics.py's compute_capacity_audit
+    divides model._surcharge_accum by model._surcharge_steps (the number of
+    model.step() calls made, every one of which counts whether or not the
+    mechanism fired that hour), not steps - 1. At the project's real 8760h
+    horizon the two divisors differ by only about 0.011%, too small for most
+    tolerances to bite (docs/thesis/defense_slides.md's 30-seed mean-surcharge
+    figures were independently recomputed from results/sweep_raw.parquet and
+    results/sweep_monopoly.parquet under the shipped `steps` divisor and match
+    the printed values to the reported precision, e.g. bc=3 k=1.0:
+    premium_green 0.0043, regulated_utility 0.0079, volatile_low_cost 0.0081,
+    and passthrough * HHI * fire_rate = 0.0187/0.0101/0.0073/0.0072 at
+    bc=1/2/3/5 -- Phase 20 evidence, not re-run here). This test instead uses
+    a 5-step run where the gap is 25%: one agent, window=2, k=0.0, demand
+    profile [1, 1, 5, 1, 1]. Hour 2 fires once (feeder jumps 1.0 -> 5.0
+    against a trailing mean of 3.0, excess 2.0, charge 2.0 EUR, entirely
+    attributed to "regulated_utility", the only broker with any contribution)
+    and capacity_passthrough=0.5 makes that surcharge exactly 0.5, applied
+    once (at hour 3; hour 4's feeder drops back to 1.0, so the window goes
+    quiet again). Total over 5 steps is exactly 0.5, so the shipped divisor
+    gives 0.5 / 5 = 0.1 and a steps - 1 divisor would give 0.5 / 4 = 0.125.
+
+    The independent total below is read from model.broker_surcharges (public)
+    fresh before each step() call -- the exact dict model.py's step() itself
+    reads as applied_surcharges -- summed by hand, never touching
+    compute_capacity_audit or _surcharge_accum/_surcharge_steps at all, so it
+    cannot be affected by the mutation under test.
+    """
+    horizon = 5
+    config = _bc2_config_for_audit(horizon, {"feedback_pricing": True, "capacity_passthrough": 0.5})
+    model = MicrogridModel(config)
+    Consumer(
+        model,
+        profile="price_sensitive",
+        demand_scale=1.0,
+        price_tolerance_eur_per_kwh=1.0,  # never breaches; switching is irrelevant to this mutant
+        volatility_tolerance_eur_per_kwh=0.05,
+        greenness_threshold=0.5,
+        switching_penalty_eur_per_kwh=0.0,
+        sustained_breach_hours=999,
+        initial_broker=model.brokers["regulated_utility"],
+    )
+    model.demand_profile[:5] = [1.0, 1.0, 5.0, 1.0, 1.0]
+
+    independent_totals = {"regulated_utility": 0.0, "volatile_low_cost": 0.0}
+    for _ in range(horizon):
+        for broker_id, surcharge in model.broker_surcharges.items():
+            independent_totals[broker_id] += surcharge
+        model.step()
+
+    assert independent_totals["regulated_utility"] == pytest.approx(0.5, abs=1e-12)
+    assert independent_totals["volatile_low_cost"] == pytest.approx(0.0, abs=1e-12)
+
+    result = model.compute_metrics()
+    expected = {broker_id: total / horizon for broker_id, total in independent_totals.items()}
+    assert result.mean_broker_surcharge_eur_per_kwh["regulated_utility"] == pytest.approx(
+        expected["regulated_utility"], abs=1e-12
+    )
+    assert result.mean_broker_surcharge_eur_per_kwh["volatile_low_cost"] == pytest.approx(
+        expected["volatile_low_cost"], abs=1e-12
+    )
+    # Tight, hand-derived pin: a steps - 1 divisor gives 0.125 here, a 25%
+    # relative gap from the correct 0.1, so no loose tolerance is needed.
+    assert result.mean_broker_surcharge_eur_per_kwh["regulated_utility"] == pytest.approx(0.1, abs=1e-9)
