@@ -8,11 +8,14 @@
       "regulated_utility": 0.3358400458797152,
       "volatile_low_cost": 0.426669623969047
     },
+    "capacity_fire_rate": 0.13293650793650794,
     "feeder_coefficient_of_variation": 0.49028758616183626,
     "feeder_mean_hourly_ramp_kwh": 6.701437568286933,
     "feeder_peak_to_average_ratio": 2.3510323156385082,
     "load_concentration_hhi": 0.3512371613497211,
-    "prosumer_self_sufficiency": 0.5260454682942199
+    "prosumer_self_sufficiency": 0.5260454682942199,
+    "total_capacity_charge_eur": 65.64494579808205,
+    "total_deferred_kwh": 442.6968821221694
   },
   "capacity_disabled": {
     "avg_cost_per_agent_eur": 51.73648795578045,
@@ -22,11 +25,14 @@
       "regulated_utility": 0.3358356579941071,
       "volatile_low_cost": 0.42680027786682345
     },
+    "capacity_fire_rate": 0.0,
     "feeder_coefficient_of_variation": 0.5239902753051148,
     "feeder_mean_hourly_ramp_kwh": 6.27938434306804,
     "feeder_peak_to_average_ratio": 2.458038384781107,
     "load_concentration_hhi": 0.35128576531214883,
-    "prosumer_self_sufficiency": 0.5256629988466164
+    "prosumer_self_sufficiency": 0.5256629988466164,
+    "total_capacity_charge_eur": 0.0,
+    "total_deferred_kwh": 0.0
   },
   "scenario_horizon_hours": 504,
   "scenario_num_agents": 50,

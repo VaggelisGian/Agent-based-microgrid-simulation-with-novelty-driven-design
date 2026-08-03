@@ -230,6 +230,58 @@ def test_allocations_sum_to_total_charge_when_positive_contribution_exists():
     assert result.total_charge_eur > 0.0
     assert sum(result.allocations_eur.values()) == pytest.approx(result.total_charge_eur, abs=1e-9)
     assert result.allocations_eur["c"] == 0.0  # non-positive contribution gets no allocation
+    # The net-export zero floor applies to the PRICING channel too, not just
+    # the P&L channel above: this mechanism defaults to surcharge_mode
+    # "proportional", whose formula (capacity.py's else branch) is built from
+    # positive_contrib, the same contribution dict clipped to >= 0 that
+    # allocations_eur is built from, not the raw signed contributions dict. A
+    # mutant that swapped positive_contrib for the raw signed dict in that
+    # formula would give net-exporting "c" a NEGATIVE surcharge (passthrough
+    # times a negative share) instead of leaving it excluded like its
+    # allocation; this assertion is what would catch that, since nothing else
+    # in this suite reads surcharges_eur_per_kwh for a net-exporting broker.
+    assert result.surcharges_eur_per_kwh["c"] == 0.0
+
+
+def test_synchronized_mode_does_not_exclude_a_net_exporting_broker():
+    """Contrast with the proportional-mode exclusion pinned just above, at the
+    identical net-export input: synchronized's formula (capacity.py's
+    surcharge_mode == "synchronized" branch) iterates every broker_id, not
+    positive_contrib, so a net-exporting broker is NOT excluded the way it is
+    under proportional (and renormalized, below) -- it gets the same equal
+    share as every other broker, as long as the step levied a charge at all.
+    """
+    window = 3
+    mechanism = CapacityMechanism(
+        window=window, k=1.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.3, surcharge_mode="synchronized"
+    )
+    for _ in range(window):
+        mechanism.step(40.0, {"a": 20.0, "b": 20.0, "c": 0.0})
+    result = mechanism.step(80.0, {"a": 50.0, "b": 30.0, "c": -10.0})  # "c" net-exports this step
+
+    assert result.total_charge_eur > 0.0
+    expected_share = 0.3 / 3  # capacity_passthrough / num_brokers, same for every broker id
+    assert result.surcharges_eur_per_kwh["c"] == pytest.approx(expected_share, abs=1e-12)
+    assert result.surcharges_eur_per_kwh["c"] == result.surcharges_eur_per_kwh["a"]
+
+
+def test_renormalized_mode_excludes_a_net_exporting_broker_like_proportional():
+    """Contrast with synchronized just above, at the same net-export input:
+    renormalized's formula (capacity.py's surcharge_mode == "renormalized"
+    branch) iterates positive_contrib, the same clipped-to-zero dict
+    proportional uses, so the net-exporting broker "c" gets exactly 0.0 here
+    too, not a share of the renormalized total.
+    """
+    window = 3
+    mechanism = CapacityMechanism(
+        window=window, k=1.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.3, surcharge_mode="renormalized"
+    )
+    for _ in range(window):
+        mechanism.step(40.0, {"a": 20.0, "b": 20.0, "c": 0.0})
+    result = mechanism.step(80.0, {"a": 50.0, "b": 30.0, "c": -10.0})  # "c" net-exports this step
+
+    assert result.total_charge_eur > 0.0
+    assert result.surcharges_eur_per_kwh["c"] == 0.0
 
 
 def test_allocation_guard_zero_when_all_contributions_non_positive():
