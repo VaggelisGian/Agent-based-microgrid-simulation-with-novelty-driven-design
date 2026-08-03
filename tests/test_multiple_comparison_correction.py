@@ -38,33 +38,84 @@ MONOPOLY_PATH = REPO_ROOT / "results" / "sweep_monopoly.parquet"
 
 
 # ---------------------------------------------------------------------------
-# The D8 sweep grid, written out here LITERALLY rather than imported from
-# scripts/analyze_sweep.py.
+# The numbers the family-size assertions are checked against, written out here
+# LITERALLY rather than imported from scripts/analyze_sweep.py.
 #
-# The family-size assertions below need an expectation that is independent of
-# the module under test. Comparing len(primary) against
-# analyze_sweep.FAMILY_SIZE_PRIMARY compares the module's output against the
-# module's own constant, so a wrong constant and a wrong row count agree with
-# each other and the test still passes. These tuples come from
+# Those assertions need an expectation that does not come from the module under
+# test. Comparing len(primary) against analyze_sweep.FAMILY_SIZE_PRIMARY
+# compares the module's output against the module's own constant, so a wrong
+# constant and a wrong row count agree with each other and the test still
+# passes.
+#
+# The constants below are NOT all the same kind of thing, and an earlier
+# version of this comment said they were: it claimed they all "come from
 # docs/DECISIONS.md D8 and scripts/run_sensitivity_sweep.py's grid, i.e. from
-# the experiment's definition, so drift in scripts/analyze_sweep.py fails
-# against them.
+# the experiment's definition". That is true of five of them and false of
+# three, so it is split out here per constant. (docs/DECISIONS.md is this
+# repo's local, untracked design log; it is deliberately not in the tracked
+# tree, so a fresh clone will not have it.)
+#
+# FROM THE EXPERIMENT'S DEFINITION. GRID_K_VALUES, GRID_BROKER_COUNTS,
+# GRID_MONOPOLY_BROKER_COUNT, GRID_REAL_CONTRASTS, GRID_DEGENERATE_CONTRASTS.
+# D8 fixes the four k values, the three broker counts and the four ablations;
+# the Phase 8 addendum fixes broker_count=1 for the monopoly arm; and which of
+# the three non-disabled contrasts is a deterministic identity rather than an
+# estimated test follows from D6's channel definition, not from an analysis
+# choice. Drift in scripts/analyze_sweep.py away from any of these fails
+# against a number the experiment really does pin.
+#
+# AN ANALYSIS-DESIGN CHOICE THE EXPERIMENT DOES NOT FIX. GRID_METRICS,
+# GRID_METRIC3_KEYS, GRID_MONOPOLY_CONTRASTS. D8 describes eight metric columns
+# per run (see ROW_COLUMNS in scripts/run_sensitivity_sweep.py: cost per agent
+# AND per kWh, load concentration AND broker shares, CoV, peak-to-average AND
+# mean ramp, self-sufficiency), and nothing in the experiment's definition says
+# five of them make up the corrected family. D8 lists three metric-3
+# sub-measures, and dropping the mean ramp is not something the experiment
+# asks for. D8's Phase 8 addendum ran the monopoly arm over all four ablations
+# (480 runs), and restricting the corrected monopoly family to
+# capacity_pricing_only is not something the experiment asks for either. All
+# three are choices scripts/analyze_sweep.py makes for itself: METRICS
+# (analyze_sweep.py:155-161), METRIC3_KEYS (:162), and the monopoly
+# restriction argued in the family-size comment at :194-203 and applied at
+# :1145-1153.
+#
+# So those three tuples are a deliberate independent DUPLICATE of an analysis
+# design choice, not a derivation of it. There is no derivation to be had, and
+# inventing one would be dishonest; duplicating rather than importing IS the
+# point, because it means a silent change to the analysis design fails here
+# instead of passing unnoticed.
+#
+# What the duplication buys, concretely, since that is the justification and
+# not the tidiness: a CONSISTENT drift now fails. Moving analyze_sweep to four
+# metrics and updating its own FAMILY_SIZE_* constants to 96/144 to match keeps
+# every check internal to that module happy, and is caught here at the
+# row-count assertion, because the expected count is computed from these tuples
+# and not from the module. The previous form of this file, which took the
+# metric list from the module under test, structurally could not catch that.
+#
+# What it does NOT catch, stated so the next reader does not overestimate it: a
+# monopoly family built by some other route that still totals 8 rows passes.
+# These tuples pin the product, not the construction.
 # ---------------------------------------------------------------------------
 
 GRID_K_VALUES = (0.5, 1.0, 1.5, 2.0)  # 4 scarcity levels
 GRID_BROKER_COUNTS = (2, 3, 5)  # 3 competitive broker counts ("the sweep" per D8)
 GRID_MONOPOLY_BROKER_COUNT = 1  # the Phase 8 supplementary arm, outside D8's sweep
+# Analysis design, duplicating analyze_sweep.METRICS' keys and their order: the
+# five of the run's eight recorded metrics that enter the corrected family.
 GRID_METRICS = (
     "avg_cost_per_agent_eur",
     "load_concentration_hhi",
     "feeder_peak_to_average_ratio",
     "feeder_coefficient_of_variation",
     "prosumer_self_sufficiency",
-)  # 5 thesis-relevant metrics
+)  # 5
+# Analysis design, duplicating analyze_sweep.METRIC3_KEYS: two of the three
+# metric-3 stability sub-measures D8 names, the mean ramp being left out there.
 GRID_METRIC3_KEYS = (
     "feeder_peak_to_average_ratio",
     "feeder_coefficient_of_variation",
-)  # 2 metric-3 stability sub-measures
+)  # 2
 
 # Each non-disabled ablation contributes one contrast against capacity_disabled.
 # capacity_pnl_only is split out because the P&L channel debits a ledger and
@@ -73,11 +124,16 @@ GRID_METRIC3_KEYS = (
 # identity, excluded from the primary family and reported separately.
 GRID_REAL_CONTRASTS = ("capacity_pricing_only", "capacity_both")  # 2
 GRID_DEGENERATE_CONTRASTS = ("capacity_pnl_only",)  # 1
-# The monopoly secondary arm quotes only capacity_pricing_only vs disabled.
+# Analysis design, duplicating the restriction analyze_sweep.py argues at
+# :194-203 and applies at :1145-1153: the monopoly secondary family quotes only
+# capacity_pricing_only vs disabled, though the arm itself ran all four
+# ablations.
 GRID_MONOPOLY_CONTRASTS = ("capacity_pricing_only",)  # 1
 
 # Derived family sizes: written as explicit products so the multiplication can
-# be checked by eye against the grid above.
+# be checked by eye against the grid above. Every factor is a length of one of
+# those constants, including the monopoly arm's single-valued broker_count
+# axis, so there is no bare number in any of the three products.
 EXPECTED_PRIMARY_SIZE = (
     len(GRID_REAL_CONTRASTS) * len(GRID_METRICS) * len(GRID_K_VALUES) * len(GRID_BROKER_COUNTS)
 )  # 2 x 5 x 4 x 3 = 120
@@ -86,10 +142,30 @@ EXPECTED_DEGENERATE_SIZE = (
 )  # 1 x 5 x 4 x 3 = 60
 EXPECTED_ALTERNATIVE_SIZE = EXPECTED_PRIMARY_SIZE + EXPECTED_DEGENERATE_SIZE  # 120 + 60 = 180
 EXPECTED_MONOPOLY_SECONDARY_SIZE = (
-    len(GRID_MONOPOLY_CONTRASTS) * len(GRID_METRIC3_KEYS) * len(GRID_K_VALUES) * 1
+    len(GRID_MONOPOLY_CONTRASTS)
+    * len(GRID_METRIC3_KEYS)
+    * len(GRID_K_VALUES)
+    * len((GRID_MONOPOLY_BROKER_COUNT,))
 )  # 1 x 2 x 4 x 1 broker_count = 8
 
-assert (EXPECTED_PRIMARY_SIZE, EXPECTED_DEGENERATE_SIZE, EXPECTED_MONOPOLY_SECONDARY_SIZE) == (120, 60, 8)
+
+def test_grid_derived_family_sizes_match_the_numbers_the_thesis_reports():
+    """Pin the three derived sizes to the numbers this thesis actually ships.
+
+    This lived as a bare module-level `assert ... == (120, 60, 8)` with no
+    message. It ran at import, so any legitimate future change to the grid
+    tuples above turned every test in this file into a single unexplained
+    collection error. A message alone would not have fixed that, so it is a
+    named test instead: a grid change now fails once, here, by name, and the
+    rest of the file still runs and reports.
+    """
+    assert (EXPECTED_PRIMARY_SIZE, EXPECTED_DEGENERATE_SIZE, EXPECTED_MONOPOLY_SECONDARY_SIZE) == (120, 60, 8), (
+        f"the grid tuples above now derive {EXPECTED_PRIMARY_SIZE} primary, {EXPECTED_DEGENERATE_SIZE} "
+        f"degenerate and {EXPECTED_MONOPOLY_SECONDARY_SIZE} monopoly-secondary tests, not the 120/60/8 "
+        "this thesis reports throughout. If the grid or the analysis design genuinely changed, update "
+        "these numbers together with everything that quotes them; if neither changed, one of the tuples "
+        "above is wrong"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -276,14 +352,23 @@ def test_bootstrap_ci_brackets_the_true_mean_for_a_clear_nonzero_effect():
     assert lo < hi
     assert hi < 0.0  # excludes zero: a real, consistent effect should show up
 
-    # The assertion with teeth: a PERCENTILE bootstrap CI of the mean must
-    # bracket the SAMPLE mean of the data it resampled. Every resample is drawn
-    # with replacement from `diff` itself, so the resample means concentrate
-    # around sample_mean; the 2.5th percentile lies below it and the 97.5th
-    # above it. That is a property of the estimator this function implements,
-    # so a wrong implementation (wrong resampling unit, wrong percentiles, an
-    # unrelated constant) fails it. This replaces a disjunct that had no teeth
-    # at all:
+    # The assertion with teeth: a PERCENTILE bootstrap CI of the mean brackets
+    # the SAMPLE mean of the data it resampled, STRICTLY, as long as that data
+    # has nonzero variance. Every resample is drawn with replacement from
+    # `diff` itself, so the resample means concentrate around sample_mean; the
+    # 2.5th percentile lies below it and the 97.5th above it.
+    #
+    # The non-degeneracy qualifier is load-bearing, not pedantry. On a
+    # zero-variance input every resample mean is the same number, so
+    # lo == hi == sample_mean and the strict inequality is FALSE. That is not a
+    # hypothetical input: it is exactly what
+    # test_bootstrap_ci_degenerate_all_zero_diff_is_zero_width_at_zero above
+    # feeds this function (np.zeros(30)), and it is the real shape of the 60
+    # deterministic capacity_pnl_only rows the same module bootstraps in
+    # build_corrected_summary. `diff` here is 30 draws from N(-2.0, 0.5), so
+    # the qualifier holds and the assertion is meaningful.
+    #
+    # This replaces a disjunct that had no teeth at all:
     #     assert lo < -2.0 < hi or abs(np.mean(diff) - (-2.0)) < 0.5
     # whose second branch only says "30 draws from N(-2.0, 0.5) have a sample
     # mean within 0.5 of -2.0", a fact about the GENERATED DATA at this fixed
@@ -291,15 +376,37 @@ def test_bootstrap_ci_brackets_the_true_mean_for_a_clear_nonzero_effect():
     # Because that branch is unconditionally true, the whole `or` was
     # unconditionally true: stubbing the return to (-1e-6, -1e-9) still passed
     # every assertion in this test.
+    #
+    # Which assertion is principled and which one detects more faults are two
+    # different questions with two different answers, and an earlier version of
+    # this comment ran them together. Statistically, the sample-mean bracketing
+    # is the principled check: it is a property of the estimator this function
+    # implements, whereas `lo < -2.0 < hi` is a statement about the
+    # data-generating process that a correct 95 percent interval is allowed to
+    # miss. On fault detection the ranking is the other way round, measured
+    # rather than assumed: over a 12-mutant set the -2.0 check caught a strict
+    # superset of what the sample-mean check caught, and two mutants were
+    # caught by it alone (the percentiles moved to a still-central 40th/60th,
+    # and the resample mean taken over the wrong axis). Both are kept, each for
+    # its own reason.
+    #
+    # Known gaps, recorded rather than left for the next reviewer to
+    # rediscover. An earlier version of this comment claimed of the sample-mean
+    # check that "a wrong implementation (wrong resampling unit, wrong
+    # percentiles, an unrelated constant) fails it". It overclaimed: a wrong
+    # resampling unit is caught only by the -2.0 check below. And three mutants
+    # pass this whole file, so nothing here rules them out: substituting a
+    # classical t-interval with no bootstrap at all, taking the percentiles of
+    # the raw resampled VALUES instead of of the resample means, and a resample
+    # that breaks the seed-level pairing. Closing those needs a different test,
+    # one that pins how the interval depends on the resampling stream, not a
+    # stronger assertion on this one input.
     assert lo < sample_mean < hi, f"bootstrap CI ({lo}, {hi}) must bracket the sample mean {sample_mean}"
 
     # Additionally true at this seed, checked numerically before being asserted
     # rather than assumed: with n=30 and sd 0.5 the CI is roughly +-0.2 wide on
     # each side of a sample mean 0.029 away from -2.0, so it also covers the
-    # generating mean. This one IS a statement about the data-generating
-    # process (a 95 percent interval is allowed to miss it), which is why it is
-    # the corroborating check and the sample-mean bracketing above is the
-    # binding one.
+    # generating mean.
     assert lo < -2.0 < hi
 
 
@@ -343,19 +450,22 @@ def test_build_corrected_summary_family_sizes_and_invariants_on_real_data():
     if MONOPOLY_PATH.is_file():
         combined_df = analyze_sweep.load_monopoly_combined(df)
         if combined_df is not None:
-            mono_only_df = combined_df[combined_df["broker_count"] == analyze_sweep.MONOPOLY_BROKER_COUNT]
+            # Filtered on this module's own GRID_MONOPOLY_BROKER_COUNT, not on
+            # analyze_sweep.MONOPOLY_BROKER_COUNT: the frame whose row count
+            # the expectation below is derived for must not be selected by the
+            # module under test.
+            mono_only_df = combined_df[combined_df["broker_count"] == GRID_MONOPOLY_BROKER_COUNT]
 
     corrected = analyze_sweep.build_corrected_summary(df, mono_only_df)
 
     primary = corrected[corrected["correction_family"] == "primary_main_sweep_real"]
     degenerate = corrected[corrected["correction_family"] == "excluded_degenerate_main_sweep"]
 
-    # Two separate checks, deliberately not one. First: the produced row counts
-    # against the sizes derived from the grid at the top of this module. Second:
-    # the module's own constants against those same derived sizes. Asserting
-    # only the first pair (as this test used to) lets a wrong constant and a
-    # wrong row count agree with each other and pass; splitting them means
-    # either kind of drift fails, and the failing assertion says which.
+    # Two separate checks, deliberately not one. First, immediately below: the
+    # produced row counts against the sizes derived from the grid at the top of
+    # this module. Asserting only the module's constants (as this test used to)
+    # lets a wrong constant and a wrong row count agree with each other and
+    # pass.
     assert len(primary) == EXPECTED_PRIMARY_SIZE, (
         f"primary family has {len(primary)} rows; grid says "
         f"{len(GRID_REAL_CONTRASTS)} contrasts x {len(GRID_METRICS)} metrics x "
@@ -366,6 +476,19 @@ def test_build_corrected_summary_family_sizes_and_invariants_on_real_data():
         f"{len(GRID_DEGENERATE_CONTRASTS)} contrast x {len(GRID_METRICS)} metrics x "
         f"{len(GRID_K_VALUES)} k x {len(GRID_BROKER_COUNTS)} broker_count = {EXPECTED_DEGENERATE_SIZE}"
     )
+    # Second: the module's own constants against those same derived sizes. An
+    # earlier comment here said this pair means "drift in either direction
+    # fails and names itself". It does not, and these two normally never fire:
+    # build_corrected_summary already asserts its produced row counts against
+    # these same constants before it returns (scripts/analyze_sweep.py:1127 for
+    # FAMILY_SIZE_PRIMARY and :1139 for FAMILY_SIZE_ALTERNATIVE), so a wrong
+    # constant with a right row count raises inside the module, at the
+    # build_corrected_summary() call above, not here; and a constant that
+    # drifts consistently with the row count trips the row-count assertions
+    # above first. They are kept as a genuine backstop, not as the check that
+    # names the constant-drift direction: if those internal asserts are ever
+    # removed or weakened, these are the only thing left holding the constants
+    # to the experiment.
     assert analyze_sweep.FAMILY_SIZE_PRIMARY == EXPECTED_PRIMARY_SIZE, (
         f"analyze_sweep.FAMILY_SIZE_PRIMARY is {analyze_sweep.FAMILY_SIZE_PRIMARY}, but the sweep grid "
         f"implies {EXPECTED_PRIMARY_SIZE}: the constant has drifted from the experiment it describes"
@@ -390,14 +513,20 @@ def test_build_corrected_summary_family_sizes_and_invariants_on_real_data():
     if mono_only_df is not None:
         mono_rows = corrected[corrected["correction_family"] == "secondary_monopoly_supplement_real"]
         # Same split as above: row count against the grid-derived size, then the
-        # module constant against the same number. The monopoly arm's grid is
+        # module constant against the same number. The monopoly family is
         # narrower than the main sweep's: only capacity_pricing_only vs
-        # disabled, only the two metric-3 sub-measures, only broker_count=1.
+        # disabled, only the two metric-3 sub-measures, only broker_count=1 (the
+        # first two of those are analysis-design choices, not the experiment's;
+        # see the header comment).
         assert len(mono_rows) == EXPECTED_MONOPOLY_SECONDARY_SIZE, (
             f"monopoly secondary family has {len(mono_rows)} rows; grid says "
             f"{len(GRID_MONOPOLY_CONTRASTS)} contrast x {len(GRID_METRIC3_KEYS)} metric3 sub-measures x "
-            f"{len(GRID_K_VALUES)} k x 1 broker_count = {EXPECTED_MONOPOLY_SECONDARY_SIZE}"
+            f"{len(GRID_K_VALUES)} k x {len((GRID_MONOPOLY_BROKER_COUNT,))} broker_count = "
+            f"{EXPECTED_MONOPOLY_SECONDARY_SIZE}"
         )
+        # Same backstop status as the two constant checks above: unreachable
+        # while build_corrected_summary's own assert at
+        # scripts/analyze_sweep.py:1155 stands, kept for when it does not.
         assert analyze_sweep.FAMILY_SIZE_MONOPOLY_SECONDARY == EXPECTED_MONOPOLY_SECONDARY_SIZE, (
             f"analyze_sweep.FAMILY_SIZE_MONOPOLY_SECONDARY is "
             f"{analyze_sweep.FAMILY_SIZE_MONOPOLY_SECONDARY}, but the monopoly arm's grid implies "
