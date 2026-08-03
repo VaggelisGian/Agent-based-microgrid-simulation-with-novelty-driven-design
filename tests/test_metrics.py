@@ -43,6 +43,24 @@ def test_compute_average_cost_handles_zero_agents_and_zero_energy():
     assert avg_per_kwh == 0.0
 
 
+def test_compute_average_cost_num_agents_and_net_energy_boundary_of_one():
+    """Phase 20.3 mutation kill: metrics.py:58 and :59 each guard a division with
+    `> 0`; a boundary_shift mutant changes the literal to `> 1`, which differs from
+    the original ONLY at the single input value 1 (num_agents == 1, or
+    total_net_energy_kwh == 1.0). Exercises that boundary directly, not a value far
+    from it: with num_agents=1 and total_net_energy_kwh=1.0, a `> 1` guard would
+    wrongly fall through to 0.0 for both outputs, while the correct `> 0` guard
+    divides normally."""
+    broker = LedgerBroker("a", "A", "generic", 0.5)
+    broker.cumulative_revenue_eur = 42.0
+    broker.cumulative_net_energy_kwh = 1.0
+
+    avg_per_agent, avg_per_kwh = metrics.compute_average_cost({"a": broker}, num_agents=1)
+
+    assert avg_per_agent == pytest.approx(42.0)
+    assert avg_per_kwh == pytest.approx(42.0)
+
+
 def test_compute_load_distribution_shares_sum_to_one():
     broker_a = LedgerBroker("a", "A", "generic", 0.5)
     broker_a.cumulative_energy_served_kwh = 700.0
@@ -80,6 +98,23 @@ def test_compute_load_distribution_returns_zero_shares_and_hhi_when_no_energy_se
     assert hhi == pytest.approx(0.0)
 
 
+def test_compute_load_distribution_boundary_of_one_kwh_total_energy():
+    """Phase 20.3 mutation kill: metrics.py:65's `total_energy_kwh <= 0` guard,
+    boundary-shifted to `<= 1`, would wrongly treat a total of exactly 1.0 kWh
+    served as "no energy served" and return the degenerate all-zero shares
+    instead of computing them. Exercises the boundary value itself (1.0 kWh
+    total), not a value far from it."""
+    broker_a = LedgerBroker("a", "A", "generic", 0.5)
+    broker_a.cumulative_energy_served_kwh = 0.6
+    broker_b = LedgerBroker("b", "B", "generic", 0.5)
+    broker_b.cumulative_energy_served_kwh = 0.4
+    shares, hhi = metrics.compute_load_distribution({"a": broker_a, "b": broker_b})
+
+    assert shares["a"] == pytest.approx(0.6)
+    assert shares["b"] == pytest.approx(0.4)
+    assert hhi == pytest.approx(0.6**2 + 0.4**2)
+
+
 def test_compute_grid_stability_returns_nan_triple_for_empty_history():
     """feeder_net_import_history == [] (metrics computed before any step) hits
     the size == 0 guard. Genuinely untested: nothing here proves the guard is
@@ -104,6 +139,35 @@ def test_compute_grid_stability_variable_series_matches_manual_calculation():
     assert cv == pytest.approx(5.0 / 15.0)
     assert peak_to_average == pytest.approx(20.0 / 15.0)
     assert ramp == pytest.approx(10.0)
+
+
+def test_compute_grid_stability_zero_mean_series_returns_nan_not_inf():
+    """Phase 20.3 mutation kill: metrics.py:80 and :81 each guard a division by
+    `mean != 0`; boundary_shift mutants change the literal to `!= -1` or `!= 1`,
+    which differ from the original ONLY at mean == 0 exactly, the value the guard
+    exists to protect. A series whose mean is exactly zero but whose values are
+    not all identical (std and max both nonzero) makes the difference observable:
+    the correct guard returns nan for both ratios; a mutated guard would instead
+    divide by the exact zero mean, producing inf (not nan, and not caught by an
+    isnan check that only exercises the empty-history case)."""
+    cv, peak_to_average, _ = metrics.compute_grid_stability([-5.0, 5.0, -5.0, 5.0])
+    assert math.isnan(cv)
+    assert math.isnan(peak_to_average)
+
+
+def test_compute_grid_stability_ramp_uses_size_boundary_of_two_not_one():
+    """Phase 20.3 mutation kill: metrics.py:82's `series.size > 1` guard,
+    boundary-shifted either direction, differs from the original only at
+    series.size == 1 (shifted to `> 0`) or size == 2 (shifted to `> 2`). A
+    one-element history has no diff to average (correct answer: 0.0, not the nan
+    that np.mean of an empty diff array would produce); a two-element history has
+    exactly one diff and must use it (correct answer: the actual ramp, not the
+    0.0 no-history fallback)."""
+    _, _, ramp_one = metrics.compute_grid_stability([10.0])
+    assert ramp_one == pytest.approx(0.0)
+
+    _, _, ramp_two = metrics.compute_grid_stability([5.0, 8.0])
+    assert ramp_two == pytest.approx(3.0)
 
 
 class StubProsumer:
@@ -278,3 +342,37 @@ def test_compute_capacity_audit_divides_mean_surcharge_by_surcharge_steps():
     # Tight, hand-derived pin: a steps - 1 divisor gives 0.125 here, a 25%
     # relative gap from the correct 0.1, so no loose tolerance is needed.
     assert result.mean_broker_surcharge_eur_per_kwh["regulated_utility"] == pytest.approx(0.1, abs=1e-9)
+
+
+class _StubCapacityForAuditBoundary:
+    total_charge_eur = 12.5
+
+    @staticmethod
+    def fire_rate():
+        return 0.25
+
+
+class _StubModelForCapacityAuditBoundary:
+    """Minimal stand-in exposing only the attributes compute_capacity_audit
+    reads (brokers, _capacity, _surcharge_steps, _surcharge_accum); avoids
+    building a full MicrogridModel and running it just to pin the steps == 1
+    boundary, which model.step() cannot reach with a nonzero accumulator on its
+    very first call (broker_surcharges starts all-zero, so step 1 always
+    accumulates 0.0 regardless of this guard)."""
+
+    def __init__(self):
+        self.brokers = {"a": None}
+        self._capacity = _StubCapacityForAuditBoundary()
+        self._surcharge_steps = 1
+        self._surcharge_accum = {"a": 0.4}
+
+
+def test_compute_capacity_audit_mean_surcharge_boundary_of_one_step():
+    """Phase 20.3 mutation kill: metrics.py:107's `steps > 0` guard,
+    boundary-shifted to `steps > 1`, differs from the original only at
+    steps == 1 exactly (one model.step() call made). The correct guard divides
+    the accumulator by 1 (a defined mean); the mutated guard falls through to
+    the 0.0 fallback instead, silently reporting no surcharge was ever applied
+    when one clearly was."""
+    _, _, mean_surcharge = metrics.compute_capacity_audit(_StubModelForCapacityAuditBoundary())
+    assert mean_surcharge["a"] == pytest.approx(0.4)
