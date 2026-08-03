@@ -425,8 +425,8 @@ def determine_verdict(gradient_tests: list[dict]) -> tuple[str, dict]:
             "pre-registered rule this fires the FIRST branch: the channel behind the peak-to-average "
             "improvement is deferred VOLUME, not desynchronized timing, because synchronized removes all "
             "cross-broker variation (nothing left to desynchronize) yet the gradient survives anyway. "
-            "The thesis's current desynchronization claim is NOT supported by this control and should be "
-            "revised toward a volume-based explanation."
+            "This control refutes the desynchronization account, and the thesis's explanation is the "
+            "volume-based one, revised in response to this arm."
         )
     elif overall_branch == "WEAKENS_VANISHES_UNDER_SYNCHRONIZED_SURVIVES_UNDER_RENORMALIZED":
         verdict = (

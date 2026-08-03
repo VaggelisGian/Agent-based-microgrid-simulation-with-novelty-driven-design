@@ -38,6 +38,61 @@ MONOPOLY_PATH = REPO_ROOT / "results" / "sweep_monopoly.parquet"
 
 
 # ---------------------------------------------------------------------------
+# The D8 sweep grid, written out here LITERALLY rather than imported from
+# scripts/analyze_sweep.py.
+#
+# The family-size assertions below need an expectation that is independent of
+# the module under test. Comparing len(primary) against
+# analyze_sweep.FAMILY_SIZE_PRIMARY compares the module's output against the
+# module's own constant, so a wrong constant and a wrong row count agree with
+# each other and the test still passes. These tuples come from
+# docs/DECISIONS.md D8 and scripts/run_sensitivity_sweep.py's grid, i.e. from
+# the experiment's definition, so drift in scripts/analyze_sweep.py fails
+# against them.
+# ---------------------------------------------------------------------------
+
+GRID_K_VALUES = (0.5, 1.0, 1.5, 2.0)  # 4 scarcity levels
+GRID_BROKER_COUNTS = (2, 3, 5)  # 3 competitive broker counts ("the sweep" per D8)
+GRID_MONOPOLY_BROKER_COUNT = 1  # the Phase 8 supplementary arm, outside D8's sweep
+GRID_METRICS = (
+    "avg_cost_per_agent_eur",
+    "load_concentration_hhi",
+    "feeder_peak_to_average_ratio",
+    "feeder_coefficient_of_variation",
+    "prosumer_self_sufficiency",
+)  # 5 thesis-relevant metrics
+GRID_METRIC3_KEYS = (
+    "feeder_peak_to_average_ratio",
+    "feeder_coefficient_of_variation",
+)  # 2 metric-3 stability sub-measures
+
+# Each non-disabled ablation contributes one contrast against capacity_disabled.
+# capacity_pnl_only is split out because the P&L channel debits a ledger and
+# writes nothing into any price or physical quantity (D6), so its paired
+# difference is exactly 0 on every metric for every seed: a deterministic
+# identity, excluded from the primary family and reported separately.
+GRID_REAL_CONTRASTS = ("capacity_pricing_only", "capacity_both")  # 2
+GRID_DEGENERATE_CONTRASTS = ("capacity_pnl_only",)  # 1
+# The monopoly secondary arm quotes only capacity_pricing_only vs disabled.
+GRID_MONOPOLY_CONTRASTS = ("capacity_pricing_only",)  # 1
+
+# Derived family sizes: written as explicit products so the multiplication can
+# be checked by eye against the grid above.
+EXPECTED_PRIMARY_SIZE = (
+    len(GRID_REAL_CONTRASTS) * len(GRID_METRICS) * len(GRID_K_VALUES) * len(GRID_BROKER_COUNTS)
+)  # 2 x 5 x 4 x 3 = 120
+EXPECTED_DEGENERATE_SIZE = (
+    len(GRID_DEGENERATE_CONTRASTS) * len(GRID_METRICS) * len(GRID_K_VALUES) * len(GRID_BROKER_COUNTS)
+)  # 1 x 5 x 4 x 3 = 60
+EXPECTED_ALTERNATIVE_SIZE = EXPECTED_PRIMARY_SIZE + EXPECTED_DEGENERATE_SIZE  # 120 + 60 = 180
+EXPECTED_MONOPOLY_SECONDARY_SIZE = (
+    len(GRID_MONOPOLY_CONTRASTS) * len(GRID_METRIC3_KEYS) * len(GRID_K_VALUES) * 1
+)  # 1 x 2 x 4 x 1 broker_count = 8
+
+assert (EXPECTED_PRIMARY_SIZE, EXPECTED_DEGENERATE_SIZE, EXPECTED_MONOPOLY_SECONDARY_SIZE) == (120, 60, 8)
+
+
+# ---------------------------------------------------------------------------
 # Hand-computable examples
 # ---------------------------------------------------------------------------
 #
@@ -215,11 +270,37 @@ def test_bootstrap_ci_brackets_the_true_mean_for_a_clear_nonzero_effect():
     # zero and bracket the true generating mean.
     rng_data = np.random.default_rng(3)
     diff = rng_data.normal(loc=-2.0, scale=0.5, size=30)
+    sample_mean = float(np.mean(diff))
     rng = np.random.default_rng(20260704)
     lo, hi = analyze_sweep.bootstrap_paired_diff_ci(diff, rng, n_boot=10000)
     assert lo < hi
     assert hi < 0.0  # excludes zero: a real, consistent effect should show up
-    assert lo < -2.0 < hi or abs(np.mean(diff) - (-2.0)) < 0.5  # sanity: near the generating mean
+
+    # The assertion with teeth: a PERCENTILE bootstrap CI of the mean must
+    # bracket the SAMPLE mean of the data it resampled. Every resample is drawn
+    # with replacement from `diff` itself, so the resample means concentrate
+    # around sample_mean; the 2.5th percentile lies below it and the 97.5th
+    # above it. That is a property of the estimator this function implements,
+    # so a wrong implementation (wrong resampling unit, wrong percentiles, an
+    # unrelated constant) fails it. This replaces a disjunct that had no teeth
+    # at all:
+    #     assert lo < -2.0 < hi or abs(np.mean(diff) - (-2.0)) < 0.5
+    # whose second branch only says "30 draws from N(-2.0, 0.5) have a sample
+    # mean within 0.5 of -2.0", a fact about the GENERATED DATA at this fixed
+    # seed (it is 0.029 away) that holds no matter what the function returns.
+    # Because that branch is unconditionally true, the whole `or` was
+    # unconditionally true: stubbing the return to (-1e-6, -1e-9) still passed
+    # every assertion in this test.
+    assert lo < sample_mean < hi, f"bootstrap CI ({lo}, {hi}) must bracket the sample mean {sample_mean}"
+
+    # Additionally true at this seed, checked numerically before being asserted
+    # rather than assumed: with n=30 and sd 0.5 the CI is roughly +-0.2 wide on
+    # each side of a sample mean 0.029 away from -2.0, so it also covers the
+    # generating mean. This one IS a statement about the data-generating
+    # process (a 95 percent interval is allowed to miss it), which is why it is
+    # the corroborating check and the sample-mean bracketing above is the
+    # binding one.
+    assert lo < -2.0 < hi
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +349,32 @@ def test_build_corrected_summary_family_sizes_and_invariants_on_real_data():
 
     primary = corrected[corrected["correction_family"] == "primary_main_sweep_real"]
     degenerate = corrected[corrected["correction_family"] == "excluded_degenerate_main_sweep"]
-    assert len(primary) == analyze_sweep.FAMILY_SIZE_PRIMARY
-    assert len(degenerate) == analyze_sweep.FAMILY_SIZE_ALTERNATIVE - analyze_sweep.FAMILY_SIZE_PRIMARY
+
+    # Two separate checks, deliberately not one. First: the produced row counts
+    # against the sizes derived from the grid at the top of this module. Second:
+    # the module's own constants against those same derived sizes. Asserting
+    # only the first pair (as this test used to) lets a wrong constant and a
+    # wrong row count agree with each other and pass; splitting them means
+    # either kind of drift fails, and the failing assertion says which.
+    assert len(primary) == EXPECTED_PRIMARY_SIZE, (
+        f"primary family has {len(primary)} rows; grid says "
+        f"{len(GRID_REAL_CONTRASTS)} contrasts x {len(GRID_METRICS)} metrics x "
+        f"{len(GRID_K_VALUES)} k x {len(GRID_BROKER_COUNTS)} broker_count = {EXPECTED_PRIMARY_SIZE}"
+    )
+    assert len(degenerate) == EXPECTED_DEGENERATE_SIZE, (
+        f"degenerate family has {len(degenerate)} rows; grid says "
+        f"{len(GRID_DEGENERATE_CONTRASTS)} contrast x {len(GRID_METRICS)} metrics x "
+        f"{len(GRID_K_VALUES)} k x {len(GRID_BROKER_COUNTS)} broker_count = {EXPECTED_DEGENERATE_SIZE}"
+    )
+    assert analyze_sweep.FAMILY_SIZE_PRIMARY == EXPECTED_PRIMARY_SIZE, (
+        f"analyze_sweep.FAMILY_SIZE_PRIMARY is {analyze_sweep.FAMILY_SIZE_PRIMARY}, but the sweep grid "
+        f"implies {EXPECTED_PRIMARY_SIZE}: the constant has drifted from the experiment it describes"
+    )
+    assert analyze_sweep.FAMILY_SIZE_ALTERNATIVE == EXPECTED_ALTERNATIVE_SIZE, (
+        f"analyze_sweep.FAMILY_SIZE_ALTERNATIVE is {analyze_sweep.FAMILY_SIZE_ALTERNATIVE}, but the sweep "
+        f"grid implies {EXPECTED_PRIMARY_SIZE} real + {EXPECTED_DEGENERATE_SIZE} degenerate = "
+        f"{EXPECTED_ALTERNATIVE_SIZE}"
+    )
 
     # every degenerate row is reported, not silently dropped, and is excluded
     # from correction by convention (p_holm == p_bh == 1.0, never "survives")
@@ -284,7 +389,20 @@ def test_build_corrected_summary_family_sizes_and_invariants_on_real_data():
 
     if mono_only_df is not None:
         mono_rows = corrected[corrected["correction_family"] == "secondary_monopoly_supplement_real"]
-        assert len(mono_rows) == analyze_sweep.FAMILY_SIZE_MONOPOLY_SECONDARY
+        # Same split as above: row count against the grid-derived size, then the
+        # module constant against the same number. The monopoly arm's grid is
+        # narrower than the main sweep's: only capacity_pricing_only vs
+        # disabled, only the two metric-3 sub-measures, only broker_count=1.
+        assert len(mono_rows) == EXPECTED_MONOPOLY_SECONDARY_SIZE, (
+            f"monopoly secondary family has {len(mono_rows)} rows; grid says "
+            f"{len(GRID_MONOPOLY_CONTRASTS)} contrast x {len(GRID_METRIC3_KEYS)} metric3 sub-measures x "
+            f"{len(GRID_K_VALUES)} k x 1 broker_count = {EXPECTED_MONOPOLY_SECONDARY_SIZE}"
+        )
+        assert analyze_sweep.FAMILY_SIZE_MONOPOLY_SECONDARY == EXPECTED_MONOPOLY_SECONDARY_SIZE, (
+            f"analyze_sweep.FAMILY_SIZE_MONOPOLY_SECONDARY is "
+            f"{analyze_sweep.FAMILY_SIZE_MONOPOLY_SECONDARY}, but the monopoly arm's grid implies "
+            f"{EXPECTED_MONOPOLY_SECONDARY_SIZE}"
+        )
         assert (mono_rows["p_holm"] >= mono_rows["p_bh"] - 1e-9).all()
 
 
