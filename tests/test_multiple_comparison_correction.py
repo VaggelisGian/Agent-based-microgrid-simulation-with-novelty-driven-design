@@ -14,10 +14,13 @@ of these tests.
 from __future__ import annotations
 
 import importlib.util
+import math
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
+from scipy import stats
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ANALYZE_SWEEP_PATH = REPO_ROOT / "scripts" / "analyze_sweep.py"
@@ -166,6 +169,60 @@ def test_grid_derived_family_sizes_match_the_numbers_the_thesis_reports():
         "these numbers together with everything that quotes them; if neither changed, one of the tuples "
         "above is wrong"
     )
+
+
+# ---------------------------------------------------------------------------
+# Small stats helpers: t_ci_halfwidth, cohens_d_independent, paired_pct_change
+#
+# These three carry Phase 20's claim-bearing surface (t-based CIs, the
+# independent-form Cohen's d reported alongside paired d_z, and paired percent
+# change), and each has a defensive guard line that Phase 20.2a's coverage run
+# found genuinely unexercised, not merely unreachable: nothing in the calling
+# code proves the guarded condition can never occur.
+# ---------------------------------------------------------------------------
+
+
+def test_t_ci_halfwidth_returns_nan_for_degenerate_n_or_non_finite_std():
+    # n < 2: no degrees of freedom for a t-interval (scipy's own t.ppf at
+    # df <= 0 already returns nan, so this half of the guard is redundant
+    # with library behaviour rather than load-bearing; kept here as a
+    # documented invariant, not the case the mutation below targets).
+    assert math.isnan(analyze_sweep.t_ci_halfwidth(std=1.0, n=1))
+    # std not finite: an infinite std (not nan -- nan multiplied by anything
+    # is nan regardless of this guard, so it would not discriminate a dropped
+    # check) is the case that actually depends on this guard: without it,
+    # sem = inf / sqrt(n) is inf and t_crit is an ordinary finite quantile, so
+    # the product is inf, not nan.
+    assert math.isnan(analyze_sweep.t_ci_halfwidth(std=float("inf"), n=30))
+    # Sanity anchor so a mutation that makes the guard fire unconditionally
+    # (over-broadening, not just narrowing) also gets caught: an ordinary
+    # n >= 2, finite-std call must NOT hit this guard.
+    assert not math.isnan(analyze_sweep.t_ci_halfwidth(std=1.0, n=2))
+
+
+def test_cohens_d_independent_returns_zero_when_pooled_sd_is_zero():
+    # Two constant, equal-valued samples: both variances are exactly 0.0, so
+    # the pooled sd is exactly 0.0. Without the guard, (mean(a) - mean(b)) /
+    # pooled_sd divides 0.0 by 0.0.
+    a = np.array([5.0, 5.0, 5.0])
+    b = np.array([5.0, 5.0, 5.0])
+    assert analyze_sweep.cohens_d_independent(a, b) == 0.0
+
+
+def test_paired_pct_change_skips_zero_disabled_seeds_in_the_paired_mean_but_not_in_the_naive_mean():
+    # Seed 2's disabled-arm value is exactly 0.0: paired_pct_change's np.where
+    # guard must route that seed to nan (excluded by nanmean below) rather
+    # than dividing by zero, while the naive percent-change-of-means (whose
+    # own denominator is the ARM MEAN, 20/3, not any single seed) is
+    # unaffected and computes normally.
+    #   per-seed pct: [(12-10)/10*100, nan, (8-10)/10*100] = [20.0, nan, -20.0]
+    #   paired mean (nanmean, seed 2 excluded): (20.0 + -20.0) / 2 = 0.0
+    #   naive: ((25/3) - (20/3)) / (20/3) * 100 = (5/3) / (20/3) * 100 = 25.0
+    ablation_vals = np.array([12.0, 5.0, 8.0])
+    disabled_vals = np.array([10.0, 0.0, 10.0])
+    paired_mean_pct, naive_pct = analyze_sweep.paired_pct_change(ablation_vals, disabled_vals)
+    assert paired_mean_pct == pytest.approx(0.0, abs=1e-9)
+    assert naive_pct == pytest.approx(25.0, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +389,16 @@ def test_bootstrap_ci_is_reproducible_given_the_same_seed():
     assert ci_a == ci_b
 
 
+def test_bootstrap_ci_empty_diff_returns_nan_pair_without_drawing_any_resample():
+    # n == 0 (a cell with no seed-level differences at all) must short-circuit
+    # to (nan, nan) before any rng.integers draw is attempted; nothing
+    # upstream of this function proves a diff array can never be empty.
+    rng = np.random.default_rng(1)
+    lo, hi = analyze_sweep.bootstrap_paired_diff_ci(np.array([]), rng, n_boot=2000)
+    assert math.isnan(lo)
+    assert math.isnan(hi)
+
+
 def test_bootstrap_ci_degenerate_all_zero_diff_is_zero_width_at_zero():
     diff = np.zeros(30)
     rng = np.random.default_rng(1)
@@ -432,6 +499,341 @@ def test_ci_disagreement_no_flag_when_intervals_agree():
     flag, detail, ratio = analyze_sweep._ci_disagreement(-1.0, 1.0, -0.9, 1.1)
     assert flag is False
     assert detail == ""
+
+
+def test_ci_disagreement_width_ratio_is_infinite_when_one_interval_has_zero_width():
+    # t-interval is degenerate (zero width, e.g. a near-exactly-zero paired
+    # sd_diff) while the bootstrap interval is not; both exclude zero, so this
+    # isolates the width-ratio branch specifically (zero_flag stays False).
+    flag, detail, ratio = analyze_sweep._ci_disagreement(1.0, 1.0, 0.5, 1.5)
+    assert flag is True
+    assert ratio == float("inf")
+    assert "width ratio" in detail
+    assert "zero-exclusion" not in detail
+
+
+# ---------------------------------------------------------------------------
+# build_summary_stats / build_effect_sizes / build_monopoly_comparison
+#
+# These CSV-assembly functions were originally left out of this file's scope
+# as "orchestration only". An adversarial review of that framing read them
+# and found real, untested arithmetic that lands directly in reported
+# columns: build_summary_stats' own mean/std/CI computation, and a
+# `disabled_frame[metric].reindex(frame.index)` seed-pairing idiom repeated,
+# unexercised, at four separate call sites (build_summary_stats:535,
+# _effect_row:568, build_monopoly_comparison:955 and :971).
+#
+# All five tests below give real, hand-built rows at only the one or two
+# grid cells being checked. Every OTHER cell in the fixed K_VALUES x
+# BROKER_COUNTS (build_summary_stats/build_effect_sizes) or K_VALUES x
+# ALL_BROKER_COUNTS (build_monopoly_comparison) grid still needs a row,
+# though, for a reason that was not obvious until it broke the first draft
+# of these tests: paired_comparison's own max_abs_diff computation
+# (analyze_sweep.py:278, `np.max(np.abs(diff))`) raises ValueError on a
+# zero-length array, unlike np.mean/np.std/scipy's ttest_rel, which all
+# degrade to nan on empty input without raising (checked directly). A
+# completely absent (k, broker_count, ablation) cell therefore crashes these
+# functions rather than producing a harmless nan row, for every ablation
+# that ever reaches paired_comparison. capacity_disabled itself never does
+# (it is the reference arm paired_comparison is always called AGAINST, never
+# WITH), so it does not need a filler row; the three non-disabled ablations
+# do. The two helpers below supply that filler: one row per required
+# (k, broker_count, ablation) combination the real, hand-built rows do not
+# already cover, with placeholder values that are never asserted on.
+# ---------------------------------------------------------------------------
+
+_SUMMARY_EFFECT_ALL_ABLATIONS = (
+    "capacity_disabled", "capacity_pricing_only", "capacity_pnl_only", "capacity_both",
+)
+
+
+def _summary_effect_filler_rows(skip=frozenset()):
+    """Filler for build_summary_stats/build_effect_sizes: one placeholder row
+    per (k, broker_count, ablation) in analyze_sweep.K_VALUES x
+    analyze_sweep.BROKER_COUNTS x all four ablations, skipping any triple
+    already given real data by the caller. Under the UNMUTATED module,
+    capacity_disabled itself never needs a filler row (paired_comparison is
+    always called against it, never with it, so it never hits the
+    zero-length np.max crash the module note above describes). It gets one
+    anyway, here: the bite-check protocol for the reindex tests below
+    deliberately removes the very `.reindex(frame.index)` call that pads a
+    missing capacity_disabled frame with nan up to the other arm's length, and
+    without that padding a filler cell whose capacity_disabled frame is
+    genuinely empty (0 rows) broadcasts against a 1-row filler frame down to a
+    zero-size array, which crashes the SAME way -- in an unrelated filler
+    cell, not at the assertion the mutation is meant to be caught by. Filling
+    capacity_disabled everywhere removes that fragility so a dropped reindex
+    fails at the intended assertion instead."""
+    rows = []
+    for k in analyze_sweep.K_VALUES:
+        for bc in analyze_sweep.BROKER_COUNTS:
+            for ablation in _SUMMARY_EFFECT_ALL_ABLATIONS:
+                if (k, bc, ablation) in skip:
+                    continue
+                rows.append({
+                    "k": k, "broker_count": bc, "ablation": ablation, "seed": 0,
+                    "avg_cost_per_agent_eur": 1.0, "load_concentration_hhi": 1.0,
+                    "feeder_peak_to_average_ratio": 1.0, "feeder_coefficient_of_variation": 1.0,
+                    "prosumer_self_sufficiency": 1.0,
+                })
+    return rows
+
+
+_MONOPOLY_FILLER_ABLATIONS = ("capacity_disabled", "capacity_pricing_only")
+
+
+def _monopoly_filler_rows(skip=frozenset()):
+    """Filler for build_monopoly_comparison: one placeholder row per (k,
+    broker_count, ablation) in analyze_sweep.K_VALUES x
+    analyze_sweep.ALL_BROKER_COUNTS x {capacity_disabled, capacity_pricing_only},
+    skipping any triple already given real data by the caller. Under the
+    UNMUTATED module capacity_disabled would not need a filler row here (it is
+    only ever reindexed onto capacity_pricing_only's index or averaged, both
+    of which degrade to nan on an absent frame); it gets one anyway for the
+    same reason _summary_effect_filler_rows' capacity_disabled filler exists,
+    see that function's docstring: the reindex-removal mutations this file's
+    bite-check protocol applies would otherwise crash in an unrelated filler
+    cell instead of failing at the intended assertion. capacity_both is left
+    unfilled: it is only ever averaged with .mean(), which does not raise on
+    an empty frame, verified directly."""
+    rows = []
+    for bc in analyze_sweep.ALL_BROKER_COUNTS:
+        for k in analyze_sweep.K_VALUES:
+            for ablation in _MONOPOLY_FILLER_ABLATIONS:
+                if (k, bc, ablation) in skip:
+                    continue
+                rows.append({
+                    "k": k, "broker_count": bc, "ablation": ablation, "seed": 0,
+                    "feeder_peak_to_average_ratio": 1.0, "feeder_coefficient_of_variation": 1.0,
+                    "avg_cost_per_agent_eur": 1.0, "capacity_fire_rate": 0.0, "total_deferred_kwh": 0.0,
+                })
+    return rows
+
+
+def test_build_monopoly_comparison_n_improved_count_matches_a_hand_built_split():
+    """build_monopoly_comparison's {metric}_n_improved_of_N column
+    (analyze_sweep.py:958) is quoted directly in the thesis text ("monopolist
+    better in N of 30 seeds") and had no test before this item. Real rows at
+    exactly one cell (broker_count=1, k=0.5): 18 of 30 seeds where the
+    pricing-arm peak-to-average ratio sits strictly below the disabled arm
+    (an "improved" seed under the metric-3 sign convention: lower is
+    better), 12 where it does not."""
+    seeds = list(range(30))
+    rows = []
+    for i, seed in enumerate(seeds):
+        improved = i < 18
+        pricing_p2a = 2.5 if improved else 3.5
+        common = {
+            "k": 0.5, "broker_count": 1, "seed": seed,
+            "feeder_coefficient_of_variation": 1.0,
+            "capacity_fire_rate": 0.0,
+            "total_deferred_kwh": 0.0,
+        }
+        rows.append({**common, "ablation": "capacity_disabled",
+                     "feeder_peak_to_average_ratio": 3.0, "avg_cost_per_agent_eur": 500.0})
+        rows.append({**common, "ablation": "capacity_pricing_only",
+                     "feeder_peak_to_average_ratio": pricing_p2a, "avg_cost_per_agent_eur": 505.0})
+    rows += _monopoly_filler_rows(skip={(0.5, 1, "capacity_disabled"), (0.5, 1, "capacity_pricing_only")})
+    combined_df = pd.DataFrame(rows)
+
+    result = analyze_sweep.build_monopoly_comparison(combined_df)
+    focus = result[(result["broker_count"] == 1) & (result["k"] == 0.5)].iloc[0]
+    assert focus["feeder_peak_to_average_ratio_n_improved_of_30"] == 18
+
+
+def test_build_summary_stats_mean_std_ci_match_independently_computed_values():
+    """build_summary_stats' own mean/std/ci95_lo/ci95_hi arithmetic
+    (analyze_sweep.py:506-521) feeds every one of those four columns in
+    results/summary_stats.csv, the most-read output, and had no test before
+    this item. Expectations are derived independently: mean/std from plain
+    numpy on the raw Python list (not by calling any analyze_sweep helper),
+    and the CI half-width from scipy.stats.t.ppf directly (matching
+    t_ci_halfwidth's documented formula, not by calling that function), so a
+    shared bug between the test and the module under test cannot cancel
+    out. One real cell: k=1.0, broker_count=3, capacity_disabled."""
+    values = [100.0] * 15 + [200.0] * 15
+    seeds = list(range(30))
+    rows = [
+        {
+            "k": 1.0, "broker_count": 3, "ablation": "capacity_disabled", "seed": seed,
+            "avg_cost_per_agent_eur": val,
+            "load_concentration_hhi": 0.3,
+            "feeder_peak_to_average_ratio": 2.0,
+            "feeder_coefficient_of_variation": 0.5,
+            "prosumer_self_sufficiency": 0.4,
+        }
+        for seed, val in zip(seeds, values)
+    ]
+    rows += _summary_effect_filler_rows(skip={(1.0, 3, "capacity_disabled")})
+    df = pd.DataFrame(rows)
+
+    result = analyze_sweep.build_summary_stats(df)
+    focus = result[
+        (result["k"] == 1.0) & (result["broker_count"] == 3)
+        & (result["ablation"] == "capacity_disabled") & (result["metric"] == "avg_cost_per_agent_eur")
+    ].iloc[0]
+
+    expected_mean = float(np.mean(values))
+    expected_std = float(np.std(values, ddof=1))
+    t_crit = stats.t.ppf(0.975, df=len(values) - 1)
+    expected_halfwidth = t_crit * expected_std / np.sqrt(len(values))
+
+    assert focus["mean"] == pytest.approx(expected_mean, abs=1e-9)
+    assert focus["std"] == pytest.approx(expected_std, abs=1e-9)
+    assert focus["ci95_lo"] == pytest.approx(expected_mean - expected_halfwidth, abs=1e-6)
+    assert focus["ci95_hi"] == pytest.approx(expected_mean + expected_halfwidth, abs=1e-6)
+
+
+def test_build_summary_stats_and_build_effect_sizes_reindex_by_seed_not_by_row_position():
+    """The shared `disabled_frame[metric].reindex(frame.index)` idiom at
+    build_summary_stats:535 and (identically) _effect_row:568 must pair the
+    ablation and disabled arms by SEED IDENTITY, not by row position.
+    _cell_by_ablation already sorts every ablation's frame by seed
+    (.sort_index()), so a same-length, same-order permutation cannot expose
+    a missing reindex on its own (both arms end up canonically sorted
+    regardless of input row order) -- the discriminating case is a
+    MISMATCHED SEED SET: capacity_disabled has seeds 0..29, capacity_pricing_only
+    has seeds 1..30 (seed 0 dropped, seed 30 added), same length (30), so a
+    positional (non-reindexed) pairing would silently misalign every row
+    without raising or changing array length.
+
+    avg_cost_per_agent_eur is built so a CORRECTLY seed-paired seed always
+    shows exactly a 10 percent markup (pricing = 1.1 * disabled, evaluated at
+    the SAME seed), regardless of the seed's absolute value; the seed-30 row
+    (present only in pricing_only) has no disabled match, so reindex must
+    produce nan there. paired_mean_pct_change uses nanmean, so a correct
+    reindex gives exactly 10.0 (29 matched seeds at exactly 10.0 percent, one
+    nan excluded); the binding claim, matching the review's own stated
+    acceptable outcomes, is "10.0, or nan -- never a different finite
+    number"."""
+    disabled_seeds = list(range(30))  # 0..29
+    pricing_seeds = list(range(1, 31))  # 1..30: seed 0 dropped, seed 30 added
+    rows = []
+    for seed in disabled_seeds:
+        base = 1000.0 + seed
+        rows.append({
+            "k": 0.5, "broker_count": 2, "ablation": "capacity_disabled", "seed": seed,
+            "avg_cost_per_agent_eur": base,
+            "load_concentration_hhi": 1.0, "feeder_peak_to_average_ratio": 1.0,
+            "feeder_coefficient_of_variation": 1.0, "prosumer_self_sufficiency": 1.0,
+        })
+    for seed in pricing_seeds:
+        base = 1000.0 + seed  # same per-seed base as the disabled arm at that seed
+        rows.append({
+            "k": 0.5, "broker_count": 2, "ablation": "capacity_pricing_only", "seed": seed,
+            "avg_cost_per_agent_eur": 1.1 * base,  # exactly +10% at the matching seed
+            "load_concentration_hhi": 1.0, "feeder_peak_to_average_ratio": 1.0,
+            "feeder_coefficient_of_variation": 1.0, "prosumer_self_sufficiency": 1.0,
+        })
+    rows += _summary_effect_filler_rows(
+        skip={(0.5, 2, "capacity_disabled"), (0.5, 2, "capacity_pricing_only")}
+    )
+    df = pd.DataFrame(rows)
+
+    summary_row = analyze_sweep.build_summary_stats(df)
+    summary_focus = summary_row[
+        (summary_row["k"] == 0.5) & (summary_row["broker_count"] == 2)
+        & (summary_row["ablation"] == "capacity_pricing_only") & (summary_row["metric"] == "avg_cost_per_agent_eur")
+    ].iloc[0]
+    assert summary_focus["vs_disabled_paired_mean_pct_change"] == pytest.approx(10.0, abs=1e-9)  # build_summary_stats:535
+
+    effects = analyze_sweep.build_effect_sizes(df)
+    effects_focus = effects[
+        (effects["block"] == "other_metrics") & (effects["k"] == 0.5) & (effects["broker_count"] == 2)
+        & (effects["ablation"] == "capacity_pricing_only") & (effects["metric"] == "avg_cost_per_agent_eur")
+    ].iloc[0]
+    assert effects_focus["paired_mean_pct_change"] == pytest.approx(10.0, abs=1e-9)  # _effect_row:568
+
+
+def test_build_monopoly_comparison_reindexes_metric3_and_cost_by_seed_not_by_row_position():
+    """Same hazard as the test above, at build_monopoly_comparison's two
+    reindex call sites: :955 (feeder_peak_to_average_ratio, part of
+    METRIC3_KEYS) and :971 (avg_cost_per_agent_eur). Different markup
+    percentages (10 percent vs 25 percent) are used for the two metrics so a
+    mutation of one call site cannot coincidentally satisfy the other
+    metric's assertion. One real cell: broker_count=1, k=1.0; seeds shifted
+    the same way as above (capacity_disabled 0..29, capacity_pricing_only
+    1..30)."""
+    disabled_seeds = list(range(30))
+    pricing_seeds = list(range(1, 31))
+    rows = []
+    for seed in disabled_seeds:
+        rows.append({
+            "k": 1.0, "broker_count": 1, "ablation": "capacity_disabled", "seed": seed,
+            "feeder_peak_to_average_ratio": 1000.0 + seed,
+            "feeder_coefficient_of_variation": 1.0,
+            "avg_cost_per_agent_eur": 500.0 + seed,
+            "capacity_fire_rate": 0.0, "total_deferred_kwh": 0.0,
+        })
+    for seed in pricing_seeds:
+        rows.append({
+            "k": 1.0, "broker_count": 1, "ablation": "capacity_pricing_only", "seed": seed,
+            "feeder_peak_to_average_ratio": 1.10 * (1000.0 + seed),  # +10% at the matching seed
+            "feeder_coefficient_of_variation": 1.0,
+            "avg_cost_per_agent_eur": 1.25 * (500.0 + seed),  # +25% at the matching seed
+            "capacity_fire_rate": 0.0, "total_deferred_kwh": 0.0,
+        })
+    rows += _monopoly_filler_rows(skip={(1.0, 1, "capacity_disabled"), (1.0, 1, "capacity_pricing_only")})
+    combined_df = pd.DataFrame(rows)
+
+    result = analyze_sweep.build_monopoly_comparison(combined_df)
+    focus = result[(result["broker_count"] == 1) & (result["k"] == 1.0)].iloc[0]
+    assert focus["feeder_peak_to_average_ratio_paired_mean_pct_change"] == pytest.approx(10.0, abs=1e-9)  # :955
+    assert focus["avg_cost_per_agent_eur_paired_mean_pct_change"] == pytest.approx(25.0, abs=1e-9)  # :971
+
+
+def test_build_effect_sizes_pnl_physical_leak_flags_only_the_out_of_tolerance_cell():
+    """build_effect_sizes' pnl_physical_leak threshold (analyze_sweep.py:640,
+    644-646, 682-684) is the D6 channel-isolation sanity flag: capacity_pnl_only
+    must be inert on the physical metrics, and this is what checks that and
+    had no test before this item. Two real cells, both load_concentration_hhi
+    (in required_scope): k=0.5 (pnl_only IDENTICAL to disabled, diff 0.0,
+    well inside the 1e-6-relative tolerance -> leak False) and k=1.0
+    (pnl_only off by 0.01 against a disabled scale of about 0.35, far outside
+    tolerance -> leak True)."""
+    rows = []
+    for seed in range(30):
+        rows.append({
+            "k": 0.5, "broker_count": 2, "ablation": "capacity_disabled", "seed": seed,
+            "load_concentration_hhi": 0.35, "feeder_peak_to_average_ratio": 1.0,
+            "feeder_coefficient_of_variation": 1.0, "prosumer_self_sufficiency": 1.0,
+            "avg_cost_per_agent_eur": 1.0,
+        })
+        rows.append({
+            "k": 0.5, "broker_count": 2, "ablation": "capacity_pnl_only", "seed": seed,
+            "load_concentration_hhi": 0.35,  # identical: no leak
+            "feeder_peak_to_average_ratio": 1.0, "feeder_coefficient_of_variation": 1.0,
+            "prosumer_self_sufficiency": 1.0, "avg_cost_per_agent_eur": 1.0,
+        })
+        rows.append({
+            "k": 1.0, "broker_count": 2, "ablation": "capacity_disabled", "seed": seed,
+            "load_concentration_hhi": 0.35, "feeder_peak_to_average_ratio": 1.0,
+            "feeder_coefficient_of_variation": 1.0, "prosumer_self_sufficiency": 1.0,
+            "avg_cost_per_agent_eur": 1.0,
+        })
+        rows.append({
+            "k": 1.0, "broker_count": 2, "ablation": "capacity_pnl_only", "seed": seed,
+            "load_concentration_hhi": 0.36,  # off by 0.01: far outside 1e-6 * 0.35 tolerance
+            "feeder_peak_to_average_ratio": 1.0, "feeder_coefficient_of_variation": 1.0,
+            "prosumer_self_sufficiency": 1.0, "avg_cost_per_agent_eur": 1.0,
+        })
+    rows += _summary_effect_filler_rows(
+        skip={
+            (0.5, 2, "capacity_disabled"), (0.5, 2, "capacity_pnl_only"),
+            (1.0, 2, "capacity_disabled"), (1.0, 2, "capacity_pnl_only"),
+        }
+    )
+    df = pd.DataFrame(rows)
+
+    result = analyze_sweep.build_effect_sizes(df)
+    cell = result[
+        (result["block"] == "pnl_sanity_check") & (result["ablation"] == "capacity_pnl_only")
+        & (result["metric"] == "load_concentration_hhi") & (result["broker_count"] == 2)
+    ]
+    no_leak_row = cell[cell["k"] == 0.5].iloc[0]
+    leak_row = cell[cell["k"] == 1.0].iloc[0]
+    assert no_leak_row["pnl_physical_leak"] is False
+    assert leak_row["pnl_physical_leak"] is True
 
 
 # ---------------------------------------------------------------------------

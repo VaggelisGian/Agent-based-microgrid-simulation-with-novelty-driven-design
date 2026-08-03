@@ -1,4 +1,5 @@
 import copy
+import math
 
 import pytest
 
@@ -61,6 +62,33 @@ def test_compute_load_distribution_monopoly_hhi_is_one():
     shares, hhi = metrics.compute_load_distribution({"a": broker_a})
     assert shares["a"] == pytest.approx(1.0)
     assert hhi == pytest.approx(1.0)
+
+
+def test_compute_load_distribution_returns_zero_shares_and_hhi_when_no_energy_served():
+    """total_energy_kwh == 0.0 (no broker has served anything yet: metrics
+    queried before any step, or every broker in the config ended up with zero
+    customers) is not guaranteed unreachable by any caller. Without the
+    early-return guard the shares dict comprehension divides by
+    total_energy_kwh directly, which raises ZeroDivisionError on exactly this
+    input, so this is genuinely untested logic that could turn metric 2
+    (load_concentration_hhi, broker_load_share) into a crash instead of the
+    documented 0.0/empty-share result."""
+    broker_a = LedgerBroker("a", "A", "generic", 0.5)
+    broker_b = LedgerBroker("b", "B", "generic", 0.5)
+    shares, hhi = metrics.compute_load_distribution({"a": broker_a, "b": broker_b})
+    assert shares == {"a": 0.0, "b": 0.0}
+    assert hhi == pytest.approx(0.0)
+
+
+def test_compute_grid_stability_returns_nan_triple_for_empty_history():
+    """feeder_net_import_history == [] (metrics computed before any step) hits
+    the size == 0 guard. Genuinely untested: nothing here proves the guard is
+    unreachable, and it directly decides what metric 3 (CoV, peak-to-average,
+    ramp) reports for a degenerate run rather than a wrong non-nan number."""
+    cv, peak_to_average, ramp = metrics.compute_grid_stability([])
+    assert math.isnan(cv)
+    assert math.isnan(peak_to_average)
+    assert math.isnan(ramp)
 
 
 def test_compute_grid_stability_constant_series_has_zero_variability():
