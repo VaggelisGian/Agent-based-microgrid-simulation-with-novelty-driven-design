@@ -33,17 +33,26 @@ Data sources (read-only; this script writes only the two named outputs below):
     re-run. Seeds are the same 30 in both files.
 
 Writes:
-  - results/surcharge_mode_comparison.csv (exactly 18 rows: 3 modes x 2 k x 3
-    broker_count, one row per cell): for each cell, capacity_both vs
-    capacity_disabled paired by seed on both metric-3 sub-measures
-    (feeder_peak_to_average_ratio, feeder_coefficient_of_variation): paired mean
-    percent change, paired Cohen's d_z, raw paired-t p-value, and Holm/BH-
-    corrected p-values, plus mean total_deferred_kwh under capacity_both and
-    capacity_disabled so deferred-volume matching is visible directly alongside
-    every effect. correction_family and notes (verdict text) columns are
-    identical on every row, matching this repo's existing convention of
-    repeating whole-table context (see e.g. metric3_sign_convention in
-    results/summary_stats.csv).
+  - results/surcharge_mode_comparison.csv (24 rows: 18 scope="mode_cell" rows, 3
+    modes x 2 k x 3 broker_count, one row per cell, plus 6 scope="gradient_bc2_to_bc5"
+    rows, 3 modes x 2 k, one row per (mode, k) gradient test -- see the
+    "Correction lifted" paragraph below for why the gradient rows were added).
+    Each mode_cell row reports, for that cell, capacity_both vs capacity_disabled
+    paired by seed on both metric-3 sub-measures (feeder_peak_to_average_ratio,
+    feeder_coefficient_of_variation): paired mean percent change, paired Cohen's
+    d_z, raw paired-t p-value, and Holm/BH-corrected p-values, plus mean
+    total_deferred_kwh under capacity_both and capacity_disabled so deferred-volume
+    matching is visible directly alongside every effect. Each gradient_bc2_to_bc5
+    row reports the broker_count 2-to-5 gradient in peak-to-average ratio's paired
+    percent change for that (mode, k): the two endpoint means, the gradient itself
+    in percentage points, its paired d_z, and its raw and Holm/BH-corrected
+    p-values. correction_family, metric3_sign_convention and notes (verdict text)
+    are shared columns across both scopes and are identical on every row within a
+    scope, matching this repo's existing convention of repeating whole-table
+    context (see e.g. metric3_sign_convention in results/summary_stats.csv); a
+    column that does not apply to a given scope (broker_count on a
+    gradient_bc2_to_bc5 row, metric and the gradient_* columns on a mode_cell row)
+    is left empty on that row rather than given a placeholder value.
   - results/plots/fig_surcharge_mode.png: the broker-count gradient in
     peak-to-average ratio under all three modes, one panel per k, all three modes
     overlaid so the gradients can be compared directly, with 95 percent CI bands
@@ -52,11 +61,32 @@ Writes:
 The broker_count=2-to-5 GRADIENT test that Task 3's decision rule needs (is the
 gradient significant, does it persist/weaken/vanish across modes) is computed and
 printed to stdout by this script (see compute_gradient_tests()/determine_verdict()
-below) and its conclusion is written into the notes column of the CSV above; it is
-not persisted as extra CSV rows, since the task's CSV spec is exactly the 18
-per-cell rows above. Re-running this script reproduces the gradient numbers
-identically (no randomness involved), so nothing here is a one-off, unreproducible
-computation.
+below) and its conclusion is written into the notes column of the CSV above. It was
+ORIGINALLY not persisted as extra CSV rows, on the reasoning that the task's CSV
+spec was exactly the 18 per-cell rows above; re-running this script reproduces the
+gradient numbers identically (no randomness involved), so nothing about them was
+ever a one-off, unreproducible computation, only a not-yet-persisted one.
+
+Correction lifted: that 18-row CSV spec was a Phase 17 TASK constraint, not a
+principle, and a later mutation-testing pass over the test suite found the gap it
+left open: the six gradient statistics this package's own headline sentences quote
+(docs/DECISIONS.md's "D10 result" and 06_results.md Section 6.9's "-7.93 and -8.37
+percentage points... at p_holm 8.4e-28 and 8.3e-15" for synchronized, and the
+renormalized figures alongside them) sat in no machine-readable column anywhere.
+Two numbers per test, the gradient in percentage points and its Holm-corrected
+p-value, did survive as PROSE at 3 to 4 significant figures inside the notes
+string this script already wrote on all 18 rows ("synchronized -7.934 pp
+(p_holm=8.36e-28, sig=True)", and the -8.367 / 8.34e-15 pair at the other k),
+which is exactly where the thesis sentences above were read off; the rest
+(pct_at_bc2, pct_at_bc5, dz, p_uncorrected and p_bh) had no home of any kind. An
+earlier draft of this paragraph said the statistics were "reproducible only by
+re-running this script, in no artifact at all". The second half of that was wrong,
+and contradicted this docstring's own description of the notes column a dozen
+lines above it. The constraint is lifted from here on: the six
+gradient tests compute_gradient_tests() computes are now ALSO written as CSV rows,
+under scope="gradient_bc2_to_bc5" (see build_gradient_table() below), distinct from
+the 18 rows' scope="mode_cell". The 18 mode_cell rows are unchanged in every field
+by this; the gradient rows are strictly additional.
 
 Statistical methods are REUSED from scripts/analyze_sweep.py, not reimplemented:
 paired_comparison (paired Cohen's d_z and scipy.stats.ttest_rel), paired_pct_change
@@ -153,6 +183,10 @@ assert EXPECTED_MODE_CELL_ROWS == 18
 FAMILY_SIZE_PRIMARY = EXPECTED_MODE_CELL_ROWS * len(METRIC3_KEYS)  # 36
 FAMILY_SIZE_GRADIENT_SECONDARY = len(ALL_MODES) * len(K_VALUES)  # 6
 EXPECTED_COMBINED_ROWS = len(ALL_MODES) * len(K_VALUES) * len(BROKER_COUNTS) * len(ABLATIONS) * len(SEEDS)  # 1080
+# results/surcharge_mode_comparison.csv's own row count: the 18 scope="mode_cell"
+# rows plus the 6 scope="gradient_bc2_to_bc5" rows (see build_gradient_table() and
+# the module docstring's "Correction lifted" paragraph).
+EXPECTED_OUTPUT_CSV_ROWS = EXPECTED_MODE_CELL_ROWS + FAMILY_SIZE_GRADIENT_SECONDARY  # 24
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +403,55 @@ def compute_gradient_tests(df: pd.DataFrame) -> list[dict]:
         t["survives_holm_alpha05"] = bool((not t["degenerate"]) and t["p_holm"] <= base.ALPHA)
         t["survives_bh_alpha05"] = bool((not t["degenerate"]) and t["p_bh"] <= base.ALPHA)
     return tests
+
+
+def build_gradient_table(gradient_tests: list[dict], notes_by_mode_k: dict) -> pd.DataFrame:
+    """The six compute_gradient_tests() results as CSV rows, under
+    scope="gradient_bc2_to_bc5" (distinct from build_mode_cell_table()'s 18
+    scope="mode_cell" rows). See this module's docstring "Correction lifted"
+    paragraph for why these are persisted as rows now rather than only printed
+    and folded into the mode_cell rows' notes column.
+
+    broker_count and metric are the two columns whose applicability differs by
+    scope (mode_cell rows have a real broker_count and no single metric column,
+    since they carry both metric3 sub-measures side by side; gradient rows span
+    broker_count 2 to 5 by construction and are always about GRADIENT_METRIC).
+    broker_count is simply omitted here, exactly like every other mode_cell-only
+    column: pd.concat in main() fills it in as empty for these rows, the same
+    way it fills the gradient-only columns in as empty for the mode_cell rows.
+    """
+    rows = []
+    for t in gradient_tests:
+        rows.append(
+            {
+                "scope": "gradient_bc2_to_bc5",
+                "capacity_surcharge_mode": t["mode"],
+                "k": t["k"],
+                "n_seeds": len(SEEDS),
+                "metric": t["metric"],
+                "gradient_pct_at_bc2": t["pct_at_bc2"],
+                "gradient_pct_at_bc5": t["pct_at_bc5"],
+                "gradient_pct_points_bc2_to_bc5": t["gradient_pct_points_bc2_to_bc5"],
+                "gradient_dz": t["gradient_dz"],
+                "gradient_p_uncorrected": t["p_uncorrected"],
+                "gradient_p_holm": t["p_holm"],
+                "gradient_p_bh": t["p_bh"],
+                "gradient_survives_holm_alpha05": t["survives_holm_alpha05"],
+                "gradient_survives_bh_alpha05": t["survives_bh_alpha05"],
+                "gradient_degenerate": t["degenerate"],
+                "correction_family": (
+                    "gradient_bc2_to_bc5_secondary (6 tests: broker_count 2->5 gradient in "
+                    "peak-to-average ratio's paired percent change, one per (mode, k); D10's own "
+                    "secondary family, corrected separately from the primary 36-test family since "
+                    "it reuses the same underlying paired seed draws under a different, differenced "
+                    "aggregation, the same reasoning scripts/analyze_structural_sweep.py gives for "
+                    "keeping its own marginal family separate from its cell family)"
+                ),
+                "metric3_sign_convention": base.SIGN_CONVENTION_NOTE,
+                "notes": notes_by_mode_k.get(t["mode"], ""),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -632,9 +715,28 @@ def main() -> int:
     mode_cell_df = build_mode_cell_table(primary_tests, notes_by_mode_k)
     assert len(mode_cell_df) == EXPECTED_MODE_CELL_ROWS, f"expected {EXPECTED_MODE_CELL_ROWS} rows, got {len(mode_cell_df)}"
 
+    gradient_df = build_gradient_table(gradient_tests, notes_by_mode_k)
+    assert len(gradient_df) == FAMILY_SIZE_GRADIENT_SECONDARY, (
+        f"expected {FAMILY_SIZE_GRADIENT_SECONDARY} gradient rows, got {len(gradient_df)}"
+    )
+
+    # sort=False: keeps mode_cell_df's own column order first, with gradient_df's
+    # columns that mode_cell_df does not already have (metric, the gradient_*
+    # columns) appended after it, rather than an alphabetical reshuffle of the
+    # whole header. broker_count (real on mode_cell rows, not applicable on
+    # gradient rows) and metric (the reverse) each pick up a float NaN from this
+    # concat on the scope that does not carry them; the explicit fix below turns
+    # that back into a real int / plain empty cell so the 18 mode_cell rows'
+    # broker_count column renders exactly as it always did ("2", not "2.0"),
+    # rather than silently changing those rows' own text to satisfy a brand new
+    # column that has nothing to do with them.
+    output_df = pd.concat([mode_cell_df, gradient_df], ignore_index=True, sort=False)
+    output_df["broker_count"] = output_df["broker_count"].apply(lambda v: "" if pd.isna(v) else int(v))
+    assert len(output_df) == EXPECTED_OUTPUT_CSV_ROWS, f"expected {EXPECTED_OUTPUT_CSV_ROWS} rows, got {len(output_df)}"
+
     OUTPUT_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    mode_cell_df.to_csv(OUTPUT_CSV_PATH, index=False)
-    print(f"\nwrote {OUTPUT_CSV_PATH} ({len(mode_cell_df)} rows)")
+    output_df.to_csv(OUTPUT_CSV_PATH, index=False)
+    print(f"\nwrote {OUTPUT_CSV_PATH} ({len(output_df)} rows: {len(mode_cell_df)} mode_cell + {len(gradient_df)} gradient_bc2_to_bc5)")
 
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     fig_path = plot_surcharge_mode(df)

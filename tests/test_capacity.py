@@ -230,6 +230,96 @@ def test_allocations_sum_to_total_charge_when_positive_contribution_exists():
     assert result.total_charge_eur > 0.0
     assert sum(result.allocations_eur.values()) == pytest.approx(result.total_charge_eur, abs=1e-9)
     assert result.allocations_eur["c"] == 0.0  # non-positive contribution gets no allocation
+    # The net-export zero floor applies to the PRICING channel too, not just
+    # the P&L channel above: this mechanism defaults to surcharge_mode
+    # "proportional", whose formula (capacity.py's else branch) is built from
+    # positive_contrib, the same contribution dict clipped to >= 0 that
+    # allocations_eur is built from, not the raw signed contributions dict. A
+    # mutant that swapped positive_contrib for the raw signed dict in that
+    # formula would give net-exporting "c" a NEGATIVE surcharge (passthrough
+    # times a negative share) instead of leaving it excluded like its
+    # allocation, and this assertion is what catches that.
+    #
+    # An earlier version of this comment claimed nothing else in this suite
+    # read surcharges_eur_per_kwh for a net-exporting broker. That was wrong:
+    # tests/test_surcharge_mode.py's
+    # test_synchronized_gives_every_broker_an_equal_surcharge_including_zero_and_negative
+    # already feeds a -15.0 contributor and pins its surcharge at 0.3/3. What
+    # that test does NOT cover, and what this assertion adds, is the
+    # PROPORTIONAL branch: synchronized never reads a contribution value at
+    # all, so it cannot tell a clipped dict from a signed one. This line is
+    # the only place in the suite where the proportional branch is asked what
+    # a net exporter pays. (The divisor variant of the same branch is covered
+    # in tests/test_surcharge_divisor.py, where the divisor lives.)
+    assert result.surcharges_eur_per_kwh["c"] == 0.0
+
+
+def test_synchronized_mode_does_not_exclude_a_net_exporting_broker():
+    """Contrast with the proportional-mode exclusion pinned just above, at the
+    identical net-export input: synchronized's formula (capacity.py's
+    surcharge_mode == "synchronized" branch) assigns the SAME constant,
+    capacity_passthrough / num_brokers, to every broker id and never reads a
+    contribution value at all, so there is no zero clip anywhere in it and
+    nothing for a negative contribution to be excluded by. A net exporter gets
+    the same equal share as every other broker, as long as the step levied a
+    charge at all.
+
+    Labelled honestly: this is a LOCALITY DUPLICATE of
+    tests/test_surcharge_mode.py's
+    test_synchronized_gives_every_broker_an_equal_surcharge_including_zero_and_negative,
+    kept here so the three modes' net-export behaviour can be read in one
+    place next to each other, not because it covers a mutant that test does
+    not. It does not: an adversarial review built the natural "synchronized
+    also excludes non-positive contributors" mutant and watched the
+    surcharge_mode test kill it on its own.
+
+    An earlier version of this docstring said synchronized "iterates every
+    broker_id, not positive_contrib". That is a distinction without a
+    difference: capacity.py builds positive_contrib over every key of
+    broker_contributions_kwh, so the two dicts always have the same key set.
+    Synchronized differs by not consulting the VALUES, which is what the
+    wording above now says.
+    """
+    window = 3
+    mechanism = CapacityMechanism(
+        window=window, k=1.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.3, surcharge_mode="synchronized"
+    )
+    for _ in range(window):
+        mechanism.step(40.0, {"a": 20.0, "b": 20.0, "c": 0.0})
+    result = mechanism.step(80.0, {"a": 50.0, "b": 30.0, "c": -10.0})  # "c" net-exports this step
+
+    assert result.total_charge_eur > 0.0
+    expected_share = 0.3 / 3  # capacity_passthrough / num_brokers, same for every broker id
+    assert result.surcharges_eur_per_kwh["c"] == pytest.approx(expected_share, abs=1e-12)
+    assert result.surcharges_eur_per_kwh["c"] == result.surcharges_eur_per_kwh["a"]
+
+
+def test_renormalized_mode_excludes_a_net_exporting_broker_like_proportional():
+    """Contrast with synchronized just above, at the same net-export input:
+    renormalized's formula (capacity.py's surcharge_mode == "renormalized"
+    branch) multiplies by a contribution taken from positive_contrib, whose
+    values have been floored at zero by max(0.0, value), so the net-exporting
+    broker "c" is multiplied by 0.0 and gets exactly 0.0 here too, not a share
+    of the renormalized total.
+
+    The exclusion is that CLIP ON THE VALUE, not the choice of dict to iterate.
+    An earlier version of this docstring said renormalized "iterates
+    positive_contrib" as though that were the operative difference; it is not,
+    since positive_contrib is built over every key of broker_contributions_kwh
+    and the two dicts always have the same key set. The thesis's own wording,
+    "floor a broker's contribution at zero before taking shares", was right
+    where that docstring was wrong.
+    """
+    window = 3
+    mechanism = CapacityMechanism(
+        window=window, k=1.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.3, surcharge_mode="renormalized"
+    )
+    for _ in range(window):
+        mechanism.step(40.0, {"a": 20.0, "b": 20.0, "c": 0.0})
+    result = mechanism.step(80.0, {"a": 50.0, "b": 30.0, "c": -10.0})  # "c" net-exports this step
+
+    assert result.total_charge_eur > 0.0
+    assert result.surcharges_eur_per_kwh["c"] == 0.0
 
 
 def test_allocation_guard_zero_when_all_contributions_non_positive():
@@ -256,6 +346,59 @@ def test_surcharge_strictly_monotone_in_contribution_share():
     # Exact formula check: surcharge_b = capacity_passthrough * contribution share.
     assert result.surcharges_eur_per_kwh["big"] == pytest.approx(0.2 * (70.0 / 100.0), abs=1e-12)
     assert result.surcharges_eur_per_kwh["small"] == pytest.approx(0.2 * (30.0 / 100.0), abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# CapacityMechanism.fire_rate() directly. Everywhere else in this suite the
+# fire rate is only ever read off a finished model run, and only ever asserted
+# to be > 0.0 or == 0.0, which leaves both the zero-observation guard and the
+# denominator itself untested: an external mutation-testing pass turned the
+# guard into `return 1.0`, deleted it outright, and widened it to
+# `hours_observed <= self.window`, and all three mutants passed the whole
+# suite. The three tests below are the direct unit coverage that was missing.
+# ---------------------------------------------------------------------------
+
+
+def test_fire_rate_is_zero_on_a_fresh_mechanism_with_no_observed_hours():
+    """Called before any step at all, which is the only state in which
+    hours_observed is 0. Deleting the guard makes this raise ZeroDivisionError
+    rather than return anything, and returning 1.0 instead of 0.0 makes a
+    mechanism that has never run report as firing every hour."""
+    mechanism = CapacityMechanism(window=168, k=1.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.1)
+    assert mechanism.hours_observed == 0
+    assert mechanism.fire_rate() == 0.0
+
+
+def test_fire_rate_is_zero_while_the_window_is_still_filling():
+    """Hours ARE observed here, so the guard above is not what returns 0.0;
+    the numerator is, because no charge can be levied until the rolling window
+    is full (D6). Distinguishes "no hours yet" from "hours, but no firing"."""
+    window = 4
+    mechanism = CapacityMechanism(window=window, k=0.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.1)
+    for hour in range(window - 1):
+        result = mechanism.step(10.0 * (hour + 1), {"a": 10.0 * (hour + 1)})
+        assert result.threshold_kwh is None  # window not filled: nothing can fire
+    assert mechanism.hours_observed == window - 1
+    assert mechanism.hours_with_excess == 0
+    assert mechanism.fire_rate() == 0.0
+
+
+def test_fire_rate_denominator_includes_the_window_fill_hours():
+    """The exact hour the window first fills: hours_observed == window, and
+    that step DOES levy a charge, so the answer is 1/window and not 0.0. This
+    is the case that separates the real guard from a widened
+    `hours_observed <= self.window` version of it, which would still be inside
+    its own early return here and would report 0.0 for a mechanism that has
+    demonstrably fired. The docstring's promise that the fill hours count as
+    non-firing rather than being excluded is the same claim: they stay in the
+    denominator."""
+    mechanism = CapacityMechanism(window=2, k=0.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.1)
+    mechanism.step(0.0, {"a": 0.0})  # window not filled yet
+    result = mechanism.step(10.0, {"a": 10.0})  # window = [0, 10]; mean=5, k=0, so threshold=5
+    assert result.total_charge_eur > 0.0
+    assert mechanism.hours_observed == 2
+    assert mechanism.hours_with_excess == 1
+    assert mechanism.fire_rate() == 0.5
 
 
 def test_capacity_mechanism_rejects_invalid_window_and_k():

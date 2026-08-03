@@ -74,6 +74,34 @@ artifacts exist:
       the physical metrics while differing on cost (the vacuity-trap check:
       a divisor that silently did nothing would still pass the first half).
 
+A later mutation-testing pass over this whole suite (an external examiner
+running deliberate, plausible mutations of the model code against every test
+here) found that results/surcharge_mode_comparison.csv, D10's own analysis
+artifact and the file docs/thesis/06_results.md Section 6.9 leans on hardest,
+was referenced by no test at all, unlike every other CSV artifact above. Item
+18 closes that gap:
+
+  18. results/surcharge_mode_comparison.csv, pinned WHOLE (24 rows: the 18
+      scope="mode_cell" per-cell rows plus the 6 scope="gradient_bc2_to_bc5"
+      rows scripts/analyze_surcharge_mode.py added at the same time this pin
+      was added; see that script's own "Correction lifted" docstring
+      paragraph), keyed by (scope, capacity_surcharge_mode, k, broker_count,
+      metric). broker_count is empty on gradient_bc2_to_bc5 rows and metric is
+      empty on mode_cell rows, the same empty-cell-as-null handling
+      structural_sensitivity.csv's identity already relies on for its own
+      per-scope varying columns. Its expected values live in
+      tests/golden/surcharge_mode_comparison_pins.json like every other
+      item's. That was not true when item 18 was first added: the fix that
+      added it was allowed to edit this module but not to add a file under
+      tests/golden/, so the snapshot shipped as an INLINE JSON literal of
+      about a thousand lines near the bottom of this module. What it pinned
+      was right; where it lived was not, because it made this the one pin here
+      that the regeneration command below could not produce, leaving a
+      legitimate future change to that CSV to be hand-edited as JSON inside a
+      test module. Phase 19 moved it into tests/golden/ and taught
+      scripts/regenerate_golden_master.py to compute it, changing nothing
+      about which columns are pinned or how they are compared.
+
 A column that is constant across a whole file gets pinned once, at the top
 level of that file's golden snapshot, and is then checked against every row.
 Both such columns today are metric3_sign_convention, in
@@ -87,15 +115,23 @@ tolerance of 1e-9 cannot tell 1e-55 from 1e-20, and those columns are exactly
 where the thesis's significance claims live, so pinning them by magnitude is
 the only pin that means anything.
 
-Expected values live in tests/golden/*.json. Regenerating them is a
-DELIBERATE, explicit act, never a side effect of running the test suite: a
-plain `pytest` invocation must never rewrite these files (see
+Expected values live in tests/golden/*.json, every one of them, with no
+exceptions left. Regenerating those files is a DELIBERATE, explicit act, never
+a side effect of running the test suite: a plain `pytest` invocation must
+never rewrite these files (see
 test_regeneration_script_import_does_not_write_golden_files below, which
 proves this structurally rather than just asserting it in prose). To
 regenerate, after confirming by hand that a shift in the pinned numbers is an
 intended consequence of a real change, run from the repository root:
 
     python scripts/regenerate_golden_master.py
+
+That command is the ONLY way any pin in this module is written, which is a
+stronger claim than it sounds: a regeneration that quietly writes LESS than
+the suite checks is the failure mode this harness actually hit in Phase 19
+(see _assert_metrics_match_golden's key-set assertion and
+test_the_two_metrics_dict_twins_emit_the_same_keys at the bottom of this
+module for what went wrong and what now stops it recurring).
 """
 
 from __future__ import annotations
@@ -113,6 +149,7 @@ import pytest
 
 from microgrid_sim.config.loader import load_config
 from microgrid_sim.environment.capacity import CapacityMechanism
+from microgrid_sim.environment.metrics import MetricsResult
 from microgrid_sim.environment.model import MicrogridModel
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -144,6 +181,15 @@ SWEEP_OPSD_HEADLINE_PARQUET_PATH = RESULTS_DIR / "sweep_opsd_headline.parquet"
 SWEEP_STRUCTURAL_PARQUET_PATH = RESULTS_DIR / "sweep_structural.parquet"
 SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH = RESULTS_DIR / "sweep_dose_matched_monopoly.parquet"
 REGENERATE_SCRIPT_PATH = REPO_ROOT / "scripts" / "regenerate_golden_master.py"
+# Item 18 (see the module docstring's own paragraph below): D10's own analysis
+# artifact. Its snapshot used to be an inline JSON literal in this module
+# rather than a file under tests/golden/, because the fix that added the pin
+# could not write there; that made it the ONE pin here the documented
+# regeneration command could not produce, so changing it legitimately meant
+# hand-editing about a thousand lines of JSON inside a test module. It is an
+# ordinary golden file now, written by that command like every other.
+SURCHARGE_MODE_COMPARISON_GOLDEN_PATH = GOLDEN_DIR / "surcharge_mode_comparison_pins.json"
+SURCHARGE_MODE_COMPARISON_CSV_PATH = RESULTS_DIR / "surcharge_mode_comparison.csv"
 
 # Must match scripts/regenerate_golden_master.py's SHORT_RUN_* constants
 # exactly, or the golden file no longer corresponds to what this test runs.
@@ -222,10 +268,46 @@ def _metrics_dict(result) -> dict:
         "feeder_peak_to_average_ratio": result.feeder_peak_to_average_ratio,
         "feeder_mean_hourly_ramp_kwh": result.feeder_mean_hourly_ramp_kwh,
         "prosumer_self_sufficiency": result.prosumer_self_sufficiency,
+        # Phase 3/3b (D6/D7) audit fields, pinned here for the first time: every
+        # OTHER place these three are checked against a golden value runs the
+        # mechanism OFF (test_master_flag_off_reproduces_baseline_byte_for_byte
+        # and friends), so those pins only ever caught a regression that broke
+        # the all-zero case. The capacity_both branch below is the one run in
+        # this whole harness where the mechanism actually fires
+        # (capacity_fire_rate > 0.0 is asserted separately above), so this is
+        # the only golden pin in the suite that can catch a regression in the
+        # NONZERO arithmetic itself, e.g. CapacityMechanism.fire_rate() using
+        # the wrong denominator (hours_observed - window + 1 instead of
+        # hours_observed): a plausible "exclude the fill window" mistake that
+        # shifts every reported fire rate by a couple of percent and that no
+        # other assertion in this suite (all of which only check > 0.0 or
+        # == 0.0) would catch.
+        "capacity_fire_rate": result.capacity_fire_rate,
+        "total_capacity_charge_eur": result.total_capacity_charge_eur,
+        "total_deferred_kwh": result.total_deferred_kwh,
     }
 
 
 def _assert_metrics_match_golden(actual: dict, expected: dict, context: str) -> None:
+    # Key set first, in both directions, BEFORE any value is compared. The
+    # loop below iterates the GOLDEN file's keys, so on its own a key that had
+    # vanished from the golden file was never looked for: the pin quietly
+    # weakened to whatever the file still happened to carry, and the suite
+    # still passed. That is not a hypothetical either. Running the documented
+    # regeneration command really did strip capacity_fire_rate,
+    # total_capacity_charge_eur and total_deferred_kwh out of
+    # tests/golden/short_deterministic_run.json (the regeneration script's
+    # _metrics_dict twin had not been given them), and nothing failed. The
+    # assertion below is what makes a vanished pin loud; the twin-agreement
+    # test at the bottom of this module is what stops the twins drifting in
+    # the first place.
+    assert set(actual.keys()) == set(expected.keys()), (
+        f"{context}: pinned key set does not match the key set the code produces "
+        f"(missing from the golden file: {sorted(set(actual) - set(expected))}; "
+        f"in the golden file but not produced: {sorted(set(expected) - set(actual))}). "
+        f"A key missing from the golden file is an UNPINNED metric, not a passing test; "
+        f"regenerate deliberately (see the module docstring) if the change is intended."
+    )
     for key, expected_value in expected.items():
         actual_value = actual[key]
         if isinstance(expected_value, dict):
@@ -644,6 +726,68 @@ DOSE_MATCHED_MONOPOLY_PINNED_FIELDS = {
     "correction_family_size": "int",
     "metric3_sign_convention": "str",
     "notes": "str",
+}
+
+# results/surcharge_mode_comparison.csv (D10's surcharge-distribution control
+# arm, scripts/analyze_surcharge_mode.py): item 18, see the module docstring's
+# own paragraph above for the mutation-testing gap this closes. Pinned WHOLE:
+# 24 rows is the same small scale as dose_matched_monopoly.csv's 46. Must
+# match the same-named constants in scripts/regenerate_golden_master.py
+# exactly, which
+# test_the_twinned_pin_shape_constants_agree_between_this_module_and_the_script
+# checks rather than leaves to this comment.
+#
+# broker_count is real on the 18 scope="mode_cell" rows and empty on the 6
+# scope="gradient_bc2_to_bc5" rows (which span broker_count 2 to 5 by
+# construction, not any single value); metric is the mirror image, empty on
+# mode_cell rows (which carry both metric3 sub-measures side by side as
+# separate columns) and real on gradient_bc2_to_bc5 rows (always
+# "feeder_peak_to_average_ratio", the one metric D10's gradient test is
+# about). (scope, capacity_surcharge_mode, k, broker_count, metric) is unique
+# over the whole file for the same reason structural_sensitivity.csv's own
+# per-scope-varying identity is: each scope's own rows are unique on the
+# columns that scope actually populates, and scope itself keeps the two
+# scopes' key spaces from colliding; _rows_by_identity asserts this rather
+# than assuming it, exactly as it does for every other pinned CSV here.
+SURCHARGE_MODE_COMPARISON_IDENTITY = ("scope", "capacity_surcharge_mode", "k", "broker_count", "metric")
+# Every non-identity column results/surcharge_mode_comparison.csv carries. The
+# five identity columns plus these twenty-eight are the whole 33-column
+# header, so no column of that file is left unpinned. A field that does not
+# apply to a row's own scope (the twelve feeder_*_paired_*/p_holm/p_bh/
+# survives_holm_alpha05 columns and the two total_deferred_kwh_* columns on a
+# gradient_bc2_to_bc5 row; the ten gradient_* columns on a mode_cell row) is
+# empty on that row, which _assert_pinned_field's None-handling already
+# covers, the same way DOSE_MATCHED_MONOPOLY_PINNED_FIELDS's comment describes
+# for that file's own per-arm-type empty columns.
+SURCHARGE_MODE_COMPARISON_PINNED_FIELDS = {
+    "n_seeds": "int",
+    "feeder_peak_to_average_ratio_paired_mean_pct_change": "float",
+    "feeder_peak_to_average_ratio_paired_dz": "float",
+    "feeder_peak_to_average_ratio_paired_p": "pvalue",
+    "feeder_peak_to_average_ratio_p_holm": "pvalue",
+    "feeder_peak_to_average_ratio_p_bh": "pvalue",
+    "feeder_peak_to_average_ratio_survives_holm_alpha05": "bool",
+    "feeder_coefficient_of_variation_paired_mean_pct_change": "float",
+    "feeder_coefficient_of_variation_paired_dz": "float",
+    "feeder_coefficient_of_variation_paired_p": "pvalue",
+    "feeder_coefficient_of_variation_p_holm": "pvalue",
+    "feeder_coefficient_of_variation_p_bh": "pvalue",
+    "feeder_coefficient_of_variation_survives_holm_alpha05": "bool",
+    "total_deferred_kwh_capacity_both_mean": "float",
+    "total_deferred_kwh_capacity_disabled_mean": "float",
+    "correction_family": "str",
+    "metric3_sign_convention": "str",
+    "notes": "str",
+    "gradient_pct_at_bc2": "float",
+    "gradient_pct_at_bc5": "float",
+    "gradient_pct_points_bc2_to_bc5": "float",
+    "gradient_dz": "float",
+    "gradient_p_uncorrected": "pvalue",
+    "gradient_p_holm": "pvalue",
+    "gradient_p_bh": "pvalue",
+    "gradient_survives_holm_alpha05": "bool",
+    "gradient_survives_bh_alpha05": "bool",
+    "gradient_degenerate": "bool",
 }
 
 # Per-(k, capacity_surcharge_divisor, ablation) cell aggregates over
@@ -1249,6 +1393,13 @@ def _assert_dose_matched_monopoly_matches_golden(df, golden: dict) -> None:
     _assert_csv_matches_row_keyed_golden(
         df, golden, DOSE_MATCHED_MONOPOLY_IDENTITY, DOSE_MATCHED_MONOPOLY_PINNED_FIELDS,
         "results/dose_matched_monopoly.csv", DOSE_MATCHED_MONOPOLY_GOLDEN_PATH.name,
+    )
+
+
+def _assert_surcharge_mode_comparison_matches_golden(df, golden: dict) -> None:
+    _assert_csv_matches_row_keyed_golden(
+        df, golden, SURCHARGE_MODE_COMPARISON_IDENTITY, SURCHARGE_MODE_COMPARISON_PINNED_FIELDS,
+        "results/surcharge_mode_comparison.csv", SURCHARGE_MODE_COMPARISON_GOLDEN_PATH.name,
     )
 
 
@@ -3901,6 +4052,220 @@ def test_dose_matched_monopoly_divisor_2_vs_divisor_1_bites_on_a_nudged_row_and_
 
 
 # ---------------------------------------------------------------------------
+# 18. Pinned digest of results/surcharge_mode_comparison.csv (D10's
+#     surcharge-distribution control arm, scripts/analyze_surcharge_mode.py):
+#     every data row and every column, keyed by (scope,
+#     capacity_surcharge_mode, k, broker_count, metric). Pinned WHOLE (24
+#     rows). See SURCHARGE_MODE_COMPARISON_IDENTITY/_PINNED_FIELDS's own
+#     comments above and the module docstring's item 18 paragraph for the
+#     mutation-testing gap this closes. Read-only, skip-if-absent, loaded from
+#     tests/golden/surcharge_mode_comparison_pins.json, same as every other
+#     item above.
+#
+#     It was not always. This snapshot shipped as an inline json.loads literal
+#     of about a thousand lines right here, because the fix that added
+#     the pin was allowed to edit this module but not to add a file under
+#     tests/golden/. The pin itself was fine; its STORAGE was not. It was the
+#     one pin in this module `python scripts/regenerate_golden_master.py` could
+#     not produce, so any legitimate change to that CSV meant hand-editing JSON
+#     inside a test module, by hand, at a thousand lines. That script computes
+#     it now (see _compute_surcharge_mode_comparison_pins there); nothing about
+#     WHAT is pinned changed in the move.
+# ---------------------------------------------------------------------------
+
+
+def test_surcharge_mode_comparison_csv_matches_pinned_digest():
+    _skip_unless_pinned_csv_available(SURCHARGE_MODE_COMPARISON_CSV_PATH, SURCHARGE_MODE_COMPARISON_GOLDEN_PATH)
+
+    import pandas as pd
+
+    golden = _load_golden(SURCHARGE_MODE_COMPARISON_GOLDEN_PATH)
+    df = pd.read_csv(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+    _assert_surcharge_mode_comparison_matches_golden(df, golden)
+
+
+def test_surcharge_mode_comparison_pin_bites_on_plausible_regressions():
+    """Prove the pin above is not vacuous, on in-memory copies only.
+
+    Five regressions specific to this file: a mode_cell percent change's sign
+    flipping (a reported improvement becomes a reported worsening at the same
+    magnitude, exactly GAP 2's net-export-floor shape at the analysis-output
+    level rather than the mechanism level), a mode_cell survives_holm_alpha05
+    flag flipping, a gradient_bc2_to_bc5 row's own gradient_pct_points_bc2_to_bc5
+    drifting by 1 percent (the number docs/DECISIONS.md's D10 result and
+    06_results.md Section 6.9 quote directly), a row's identity silently
+    colliding with another row's (two mode_cell rows sharing a broker_count and
+    mode, relabelled onto the same k, which _rows_by_identity's own duplicate-key
+    guard must catch), and a row disappearing. The CSV's own digest is captured
+    before and re-checked after, so the file on disk is provably untouched.
+    """
+    _skip_unless_pinned_csv_available(SURCHARGE_MODE_COMPARISON_CSV_PATH, SURCHARGE_MODE_COMPARISON_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+    golden = _load_golden(SURCHARGE_MODE_COMPARISON_GOLDEN_PATH)
+    df = pd.read_csv(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+
+    _assert_surcharge_mode_comparison_matches_golden(df, golden)  # unperturbed: passes
+
+    # (a) a mode_cell percent change's sign flips.
+    flipped = df.copy(deep=True)
+    mode_cell_nonzero = flipped.index[
+        (flipped["scope"] == "mode_cell")
+        & (flipped["feeder_peak_to_average_ratio_paired_mean_pct_change"].abs() > 1e-6)
+    ]
+    assert len(mode_cell_nonzero) > 0, "expected at least one non-degenerate mode_cell row"
+    row = mode_cell_nonzero[0]
+    flipped.loc[row, "feeder_peak_to_average_ratio_paired_mean_pct_change"] = -flipped.loc[
+        row, "feeder_peak_to_average_ratio_paired_mean_pct_change"
+    ]
+    with pytest.raises(AssertionError):
+        _assert_surcharge_mode_comparison_matches_golden(flipped, golden)
+
+    # (b) a mode_cell Holm survival flag flips.
+    flag_flipped = df.copy(deep=True)
+    surviving = flag_flipped.index[
+        (flag_flipped["scope"] == "mode_cell")
+        & flag_flipped["feeder_peak_to_average_ratio_survives_holm_alpha05"].eq(True)
+    ]
+    assert len(surviving) > 0, "expected at least one mode_cell row surviving Holm correction"
+    flag_flipped.loc[surviving[0], "feeder_peak_to_average_ratio_survives_holm_alpha05"] = False
+    with pytest.raises(AssertionError):
+        _assert_surcharge_mode_comparison_matches_golden(flag_flipped, golden)
+
+    # (c) a gradient_bc2_to_bc5 row's own headline gradient number drifts by 1
+    #     percent: small enough to pass a casual eyeball check, and this is
+    #     the exact figure docs/DECISIONS.md's D10 result and
+    #     06_results.md Section 6.9 quote (the synchronized -7.93/-8.37 pp
+    #     numbers GAP 3's brief names directly).
+    drifted = df.copy(deep=True)
+    gradient_rows = drifted.index[drifted["scope"] == "gradient_bc2_to_bc5"]
+    assert len(gradient_rows) == 6
+    row = gradient_rows[0]
+    drifted.loc[row, "gradient_pct_points_bc2_to_bc5"] *= 1.01
+    with pytest.raises(AssertionError):
+        _assert_surcharge_mode_comparison_matches_golden(drifted, golden)
+
+    # (d) a row's identity silently collides with another row's: two mode_cell
+    #     rows sharing (capacity_surcharge_mode, broker_count), relabelled from
+    #     one shipped k level onto the other, which _rows_by_identity's own
+    #     duplicate-key guard must catch.
+    collided = df.copy(deep=True)
+    prop_bc2_rows = collided.index[
+        (collided["scope"] == "mode_cell")
+        & (collided["capacity_surcharge_mode"] == "proportional")
+        & (collided["broker_count"] == 2)
+    ]
+    assert len(prop_bc2_rows) == 2, "expected exactly one k=0.5 and one k=1.0 row for this (scope, mode, broker_count)"
+    collided.loc[prop_bc2_rows[0], "k"] = collided.loc[prop_bc2_rows[1], "k"]
+    with pytest.raises(AssertionError):
+        _assert_surcharge_mode_comparison_matches_golden(collided, golden)
+
+    # (e) a row disappears.
+    dropped = df.drop(index=df.index[-1])
+    with pytest.raises(AssertionError):
+        _assert_surcharge_mode_comparison_matches_golden(dropped, golden)
+
+    assert _sha256(SURCHARGE_MODE_COMPARISON_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+def test_surcharge_mode_comparison_pin_bites_on_a_p_value_magnitude_shift():
+    """A p-value moving far in magnitude while staying far below the old
+    absolute floor: under the previous rel=1e-9/abs=1e-9 comparison (either
+    tolerance sufficing) this exact perturbation PASSED, because both values
+    sit under the absolute floor. The assertion inside reproduces that old
+    rule and shows it calling the two values equal, immediately before the
+    current rule rejects them.
+    """
+    _skip_unless_pinned_csv_available(SURCHARGE_MODE_COMPARISON_CSV_PATH, SURCHARGE_MODE_COMPARISON_GOLDEN_PATH)
+
+    import pandas as pd
+
+    digest_before = _sha256(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+    golden = _load_golden(SURCHARGE_MODE_COMPARISON_GOLDEN_PATH)
+    df = pd.read_csv(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+
+    _assert_surcharge_mode_comparison_matches_golden(df, golden)  # unperturbed: passes
+
+    moved = df.copy(deep=True)
+    column = "feeder_coefficient_of_variation_paired_p"
+    nonzero = moved.index[moved[column] > 0.0]
+    row = moved.loc[nonzero, column].idxmin()
+    original = float(moved.loc[row, column])
+    assert original < 1e-30, "expected a real p-value far below the old absolute floor"
+    perturbed_to = 1e-20  # still hopelessly significant, still far below 1e-9
+    assert perturbed_to == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+        f"the old rule really did call {original!r} and {perturbed_to!r} equal"
+    )
+    moved.loc[row, column] = perturbed_to
+    with pytest.raises(AssertionError):
+        _assert_surcharge_mode_comparison_matches_golden(moved, golden)
+
+    assert _sha256(SURCHARGE_MODE_COMPARISON_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
+
+
+SURCHARGE_MODE_COMPARISON_COLUMNS = (
+    "scope",
+    "capacity_surcharge_mode",
+    "k",
+    "broker_count",
+    "n_seeds",
+    "feeder_peak_to_average_ratio_paired_mean_pct_change",
+    "feeder_peak_to_average_ratio_paired_dz",
+    "feeder_peak_to_average_ratio_paired_p",
+    "feeder_peak_to_average_ratio_p_holm",
+    "feeder_peak_to_average_ratio_p_bh",
+    "feeder_peak_to_average_ratio_survives_holm_alpha05",
+    "feeder_coefficient_of_variation_paired_mean_pct_change",
+    "feeder_coefficient_of_variation_paired_dz",
+    "feeder_coefficient_of_variation_paired_p",
+    "feeder_coefficient_of_variation_p_holm",
+    "feeder_coefficient_of_variation_p_bh",
+    "feeder_coefficient_of_variation_survives_holm_alpha05",
+    "total_deferred_kwh_capacity_both_mean",
+    "total_deferred_kwh_capacity_disabled_mean",
+    "correction_family",
+    "metric3_sign_convention",
+    "notes",
+    "metric",
+    "gradient_pct_at_bc2",
+    "gradient_pct_at_bc5",
+    "gradient_pct_points_bc2_to_bc5",
+    "gradient_dz",
+    "gradient_p_uncorrected",
+    "gradient_p_holm",
+    "gradient_p_bh",
+    "gradient_survives_holm_alpha05",
+    "gradient_survives_bh_alpha05",
+    "gradient_degenerate",
+)
+
+
+def test_surcharge_mode_comparison_csv_column_set_matches_pinned():
+    _skip_unless_results_artifact_available(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+    import pandas as pd
+
+    header = pd.read_csv(SURCHARGE_MODE_COMPARISON_CSV_PATH, nrows=0).columns
+    _assert_exact_column_set(header, SURCHARGE_MODE_COMPARISON_COLUMNS, "results/surcharge_mode_comparison.csv")
+
+
+def test_surcharge_mode_comparison_csv_column_set_pin_bites_on_growth_and_shrinkage():
+    _skip_unless_results_artifact_available(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+    import pandas as pd
+
+    header = list(pd.read_csv(SURCHARGE_MODE_COMPARISON_CSV_PATH, nrows=0).columns)
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(
+            header + ["a_new_column"], SURCHARGE_MODE_COMPARISON_COLUMNS, "results/surcharge_mode_comparison.csv"
+        )
+    with pytest.raises(AssertionError):
+        _assert_exact_column_set(
+            header[:-1], SURCHARGE_MODE_COMPARISON_COLUMNS, "results/surcharge_mode_comparison.csv"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Regeneration guard: a plain pytest run must never rewrite the golden files.
 # scripts/regenerate_golden_master.py sits outside pyproject.toml's testpaths
 # ("tests"), so pytest's collector never looks at it and this module never
@@ -3909,7 +4274,154 @@ def test_dose_matched_monopoly_divisor_2_vs_divisor_1_bites_on_a_nudged_row_and_
 # module-level constants and functions) does not write anything, because the
 # write logic is gated behind `if __name__ == "__main__":`, which is false
 # for any import.
+#
+# The two tests after it use the same import for a different purpose: this
+# module and that script carry TWIN definitions of the same things (a
+# _metrics_dict, and one IDENTITY/PINNED_FIELDS pair per pinned CSV), and
+# every one of those twins is only held together by a comment saying "must
+# match". Phase 19 found out what that is worth: the three capacity audit
+# fields were added to this module's _metrics_dict and not to the script's, so
+# the documented regeneration command stripped six pinned values out of
+# tests/golden/short_deterministic_run.json and the suite still passed. The
+# comments are still there, and they are still not enforcement; these two
+# tests are.
 # ---------------------------------------------------------------------------
+
+
+def _import_regeneration_script():
+    """scripts/regenerate_golden_master.py, imported as a module.
+
+    That script's top level inserts into sys.path and installs a warnings
+    filter, both process-global and both otherwise outliving the caller for
+    the rest of the pytest session. Both are undone here: a test that reaches
+    into another module should not leave side effects of its own. Importing it
+    writes nothing, which is not assumed but proved by
+    test_regeneration_script_import_does_not_write_golden_files below.
+    """
+    spec = importlib.util.spec_from_file_location("_golden_regen_import_probe", REGENERATE_SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys_path_before = list(sys.path)
+    try:
+        with warnings.catch_warnings():
+            spec.loader.exec_module(module)  # executes top-level code; module.__name__ != "__main__" here
+    finally:
+        sys.path[:] = sys_path_before
+    return module
+
+
+def test_the_two_metrics_dict_twins_emit_the_same_keys():
+    """_metrics_dict exists twice, here and in the regeneration script, and
+    the golden file is only as strong as their AGREEMENT: this module decides
+    what is compared, that script decides what is stored, and a key present in
+    one but not the other is an unpinned metric either way.
+
+    Fed one MetricsResult with a distinct value in every field, so this
+    compares the produced dicts whole rather than only their key sets: a twin
+    that read the right key off the wrong attribute would keep the key sets
+    equal and still be wrong.
+    """
+    module = _import_regeneration_script()
+
+    # Distinct, recognisable values, none of them equal to another, so any
+    # crossed attribute shows up as a value mismatch rather than cancelling out.
+    result = MetricsResult(
+        avg_cost_per_agent_eur=1.0,
+        avg_cost_per_kwh_eur=2.0,
+        broker_load_share={"a": 0.25, "b": 0.75},
+        load_concentration_hhi=3.0,
+        feeder_coefficient_of_variation=4.0,
+        feeder_peak_to_average_ratio=5.0,
+        feeder_mean_hourly_ramp_kwh=6.0,
+        prosumer_self_sufficiency=7.0,
+        total_capacity_charge_eur=8.0,
+        capacity_fire_rate=9.0,
+        mean_broker_surcharge_eur_per_kwh={"a": 0.1},
+        total_deferred_kwh=10.0,
+    )
+
+    here = _metrics_dict(result)
+    there = module._metrics_dict(result)
+    assert set(here) == set(there), (
+        "the two _metrics_dict twins no longer emit the same keys "
+        f"(only in tests/test_golden_master.py: {sorted(set(here) - set(there))}; "
+        f"only in scripts/regenerate_golden_master.py: {sorted(set(there) - set(here))}). "
+        "A key this module compares but that script does not write vanishes from "
+        "tests/golden/short_deterministic_run.json on the next regeneration; a key that "
+        "script writes but this module does not compare is stored and never checked. "
+        "Add it to BOTH."
+    )
+    assert here == there, "the two _metrics_dict twins emit the same keys but disagree on a value"
+
+
+# Every constant this module and the regeneration script both define under one
+# of these suffixes describes a pinned snapshot's SHAPE (which columns identify
+# a row, which columns are pinned and how each is compared). Matched by suffix
+# rather than by a hand-written list of names, so a pin added later is covered
+# without anyone remembering to extend this test.
+_TWINNED_CONSTANT_SUFFIXES = (
+    "_IDENTITY",
+    "_PINNED_FIELDS",
+    "_CELL_FIELDS",
+    "_CONSTANT_FIELDS",
+    "_PINNED_ROW_KEYS",
+    "_COLUMNS",
+)
+
+
+def test_the_twinned_pin_shape_constants_agree_between_this_module_and_the_script():
+    """Same failure mode as the _metrics_dict twins, one level up: if this
+    module pins a column the script does not write (or the reverse), the
+    golden file and the check over it stop describing the same thing.
+
+    Only names DEFINED IN BOTH are compared, so a constant that legitimately
+    lives in one place alone (this module's whole-header *_COLUMNS tuples, for
+    instance, which are checked against the CSV header directly and have no
+    counterpart in the script) is not dragged in.
+    """
+    module = _import_regeneration_script()
+    here = globals()
+
+    shared = sorted(
+        name
+        for name in here
+        if name.endswith(_TWINNED_CONSTANT_SUFFIXES) and hasattr(module, name)
+    )
+    assert shared, "expected at least one twinned pin-shape constant"
+    # The pins this module actually compares against a golden file the script
+    # writes. Named explicitly so that a twin QUIETLY DISAPPEARING from one
+    # side (which would just shrink `shared` above) fails here instead of
+    # silently reducing what this test covers.
+    for expected_name in (
+        "SUMMARY_STATS_IDENTITY",
+        "SUMMARY_STATS_PINNED_FIELDS",
+        "STRUCTURAL_SENSITIVITY_IDENTITY",
+        "STRUCTURAL_SENSITIVITY_PINNED_FIELDS",
+        "DEMAND_SOURCE_IDENTITY",
+        "DEMAND_SOURCE_PINNED_FIELDS",
+        "MONOPOLY_IDENTITY",
+        "MONOPOLY_PINNED_FIELDS",
+        "EFFECT_SIZES_IDENTITY",
+        "EFFECT_SIZES_PINNED_FIELDS",
+        "SUMMARY_STATS_CORRECTED_IDENTITY",
+        "SUMMARY_STATS_CORRECTED_PINNED_FIELDS",
+        "FAMILY_SENSITIVITY_IDENTITY",
+        "FAMILY_SENSITIVITY_PINNED_FIELDS",
+        "DOSE_MATCHED_MONOPOLY_IDENTITY",
+        "DOSE_MATCHED_MONOPOLY_PINNED_FIELDS",
+        "DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY",
+        "DOSE_MATCHED_MONOPOLY_PARQUET_CELL_FIELDS",
+        "SURCHARGE_MODE_COMPARISON_IDENTITY",
+        "SURCHARGE_MODE_COMPARISON_PINNED_FIELDS",
+    ):
+        assert expected_name in shared, f"twinned pin-shape constant no longer defined in both: {expected_name}"
+
+    for name in shared:
+        assert here[name] == getattr(module, name), (
+            f"{name} differs between tests/test_golden_master.py and "
+            f"scripts/regenerate_golden_master.py: this module has {here[name]!r}, "
+            f"that script has {getattr(module, name)!r}. The snapshot that script "
+            "writes and the check this module runs must describe the same columns."
+        )
 
 
 def test_regeneration_script_import_does_not_write_golden_files():
@@ -3932,23 +4444,13 @@ def test_regeneration_script_import_does_not_write_golden_files():
         FAMILY_SENSITIVITY_GOLDEN_PATH,
         DOSE_MATCHED_MONOPOLY_GOLDEN_PATH,
         SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH,
+        SURCHARGE_MODE_COMPARISON_GOLDEN_PATH,
     ):
         if known_path.is_file():
             assert known_path in golden_paths, f"golden file missing from the no-rewrite snapshot: {known_path}"
     mtimes_before = {path: path.stat().st_mtime_ns for path in golden_paths}
 
-    spec = importlib.util.spec_from_file_location("_golden_regen_import_probe", REGENERATE_SCRIPT_PATH)
-    module = importlib.util.module_from_spec(spec)
-    # That script's top level inserts into sys.path and installs a warnings
-    # filter, both process-global and both otherwise outliving this test for
-    # the rest of the pytest session. Undo both: a test that checks for
-    # side effects should not leave any of its own.
-    sys_path_before = list(sys.path)
-    try:
-        with warnings.catch_warnings():
-            spec.loader.exec_module(module)  # executes top-level code; module.__name__ != "__main__" here
-    finally:
-        sys.path[:] = sys_path_before
+    module = _import_regeneration_script()
 
     assert module.__name__ != "__main__"
     assert hasattr(module, "main"), "regeneration entry point must be a function, not top-level code"

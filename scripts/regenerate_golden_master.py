@@ -52,6 +52,13 @@ What this writes:
     capacity_surcharge_divisor, ablation) cell aggregates (row count plus six
     metric means) over results/sweep_dose_matched_monopoly.parquet, the
     claim-bearing numbers behind D11 result that no CSV covers directly.
+  - tests/golden/surcharge_mode_comparison_pins.json: every data row of
+    results/surcharge_mode_comparison.csv (D10's surcharge-distribution
+    control arm), pinned whole (24 rows). This one was missing from this
+    script until Phase 19: its snapshot lived as an inline JSON literal inside
+    tests/test_golden_master.py, which made it the only pin in that module the
+    command above could not produce, so a legitimate change to that CSV meant
+    hand-editing about a thousand lines of JSON inside a test module.
 
 Every CSV or parquet named above is READ-ONLY input here. This script writes
 nothing but tests/golden/*.json, and each derived snapshot is skipped with a
@@ -101,6 +108,8 @@ SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH = (
     GOLDEN_DIR / "sweep_dose_matched_monopoly_parquet_cell_pins.json"
 )
 SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_PATH = _RESULTS_DIR / "sweep_dose_matched_monopoly.parquet"
+SURCHARGE_MODE_COMPARISON_GOLDEN_PATH = GOLDEN_DIR / "surcharge_mode_comparison_pins.json"
+SURCHARGE_MODE_COMPARISON_CSV_PATH = _RESULTS_DIR / "surcharge_mode_comparison.csv"
 
 # Must match tests/test_golden_master.py's SHORT_HORIZON_HOURS / SHORT_NUM_AGENTS
 # / SHORT_SEED exactly. Horizon comfortably exceeds the 168h rolling window
@@ -376,6 +385,46 @@ DOSE_MATCHED_MONOPOLY_PARQUET_CELL_FIELDS = {
     "mean_total_capacity_charge_eur": "float",
 }
 
+# results/surcharge_mode_comparison.csv (D10's surcharge-distribution control
+# arm, scripts/analyze_surcharge_mode.py): 24 rows (18 scope="mode_cell" plus
+# 6 scope="gradient_bc2_to_bc5"), pinned whole. broker_count is empty on the
+# gradient rows and metric is empty on the mode_cell rows, the same
+# empty-cell-as-null handling structural_sensitivity.csv's identity already
+# relies on. The five identity columns plus these twenty-eight are the whole
+# 33-column header, so no column of that file is left unpinned. Must match
+# the same-named constants in tests/test_golden_master.py exactly.
+SURCHARGE_MODE_COMPARISON_IDENTITY = ("scope", "capacity_surcharge_mode", "k", "broker_count", "metric")
+SURCHARGE_MODE_COMPARISON_PINNED_FIELDS = {
+    "n_seeds": "int",
+    "feeder_peak_to_average_ratio_paired_mean_pct_change": "float",
+    "feeder_peak_to_average_ratio_paired_dz": "float",
+    "feeder_peak_to_average_ratio_paired_p": "pvalue",
+    "feeder_peak_to_average_ratio_p_holm": "pvalue",
+    "feeder_peak_to_average_ratio_p_bh": "pvalue",
+    "feeder_peak_to_average_ratio_survives_holm_alpha05": "bool",
+    "feeder_coefficient_of_variation_paired_mean_pct_change": "float",
+    "feeder_coefficient_of_variation_paired_dz": "float",
+    "feeder_coefficient_of_variation_paired_p": "pvalue",
+    "feeder_coefficient_of_variation_p_holm": "pvalue",
+    "feeder_coefficient_of_variation_p_bh": "pvalue",
+    "feeder_coefficient_of_variation_survives_holm_alpha05": "bool",
+    "total_deferred_kwh_capacity_both_mean": "float",
+    "total_deferred_kwh_capacity_disabled_mean": "float",
+    "correction_family": "str",
+    "metric3_sign_convention": "str",
+    "notes": "str",
+    "gradient_pct_at_bc2": "float",
+    "gradient_pct_at_bc5": "float",
+    "gradient_pct_points_bc2_to_bc5": "float",
+    "gradient_dz": "float",
+    "gradient_p_uncorrected": "pvalue",
+    "gradient_p_holm": "pvalue",
+    "gradient_p_bh": "pvalue",
+    "gradient_survives_holm_alpha05": "bool",
+    "gradient_survives_bh_alpha05": "bool",
+    "gradient_degenerate": "bool",
+}
+
 
 def _dose_matched_monopoly_parquet_cell_aggregates(df):
     """One row per (k, capacity_surcharge_divisor, ablation) cell of
@@ -414,6 +463,21 @@ def _scenario_config(name: str) -> dict:
 
 
 def _metrics_dict(result) -> dict:
+    """Twin of the same-named function in tests/test_golden_master.py; must
+    emit the SAME key set or this script silently unpins whatever that file
+    added and this one did not.
+
+    That is not hypothetical. The three capacity audit fields below were added
+    to the test-side twin alone, and running this script then stripped all six
+    of their pinned values (three fields x two scenarios) out of
+    tests/golden/short_deterministic_run.json without failing anything: the
+    test-side comparison iterated the GOLDEN file's keys, so a pin that had
+    vanished from the file was simply never looked for. Both halves of that
+    are fixed now, the missing fields here and the key-set assertion in
+    _assert_metrics_match_golden there, and
+    test_the_two_metrics_dict_twins_emit_the_same_keys in that file fails if
+    the two ever drift apart again.
+    """
     return {
         "avg_cost_per_agent_eur": result.avg_cost_per_agent_eur,
         "avg_cost_per_kwh_eur": result.avg_cost_per_kwh_eur,
@@ -423,6 +487,12 @@ def _metrics_dict(result) -> dict:
         "feeder_peak_to_average_ratio": result.feeder_peak_to_average_ratio,
         "feeder_mean_hourly_ramp_kwh": result.feeder_mean_hourly_ramp_kwh,
         "prosumer_self_sufficiency": result.prosumer_self_sufficiency,
+        # Phase 3/3b (D6/D7) audit fields; see the test-side twin's own comment
+        # for why the capacity_both arm is the only golden pin in the suite
+        # that can catch a regression in the NONZERO capacity arithmetic.
+        "capacity_fire_rate": result.capacity_fire_rate,
+        "total_capacity_charge_eur": result.total_capacity_charge_eur,
+        "total_deferred_kwh": result.total_deferred_kwh,
     }
 
 
@@ -923,6 +993,42 @@ def _compute_dose_matched_monopoly_parquet_cell_pins() -> dict | None:
     }
 
 
+def _compute_surcharge_mode_comparison_pins() -> dict | None:
+    if not SURCHARGE_MODE_COMPARISON_CSV_PATH.is_file():
+        print(
+            f"note: {SURCHARGE_MODE_COMPARISON_CSV_PATH} not present; "
+            "skipping surcharge_mode_comparison_pins.json regeneration"
+        )
+        return None
+
+    import pandas as pd
+
+    df = pd.read_csv(SURCHARGE_MODE_COMPARISON_CSV_PATH)
+    return {
+        "_comment": (
+            "Pinned digest of results/surcharge_mode_comparison.csv (D10's "
+            "surcharge-distribution control arm, scripts/analyze_surcharge_mode.py): "
+            "every data row and every column, keyed by (scope, capacity_surcharge_mode, "
+            "k, broker_count, metric), plus the row count. Pinned whole: 24 rows (the 18 "
+            "scope=mode_cell per-cell rows plus the 6 scope=gradient_bc2_to_bc5 rows) is "
+            "the same small scale as dose_matched_monopoly.csv's 46. broker_count is "
+            "empty on gradient rows and metric is empty on mode_cell rows, stored as null "
+            "either way, the same empty-cell handling structural_sensitivity.csv's "
+            "identity already uses. This snapshot previously had no entry in this script "
+            "at all: it was an inline JSON literal inside tests/test_golden_master.py, "
+            "because the fix that added it could not write under tests/golden/, which "
+            "left it the one pin in that module the documented regeneration command "
+            "could not produce. It is a normal golden file now. "
+            "results/surcharge_mode_comparison.csv is read-only input here and is never "
+            "written by this script; only this pinned snapshot is written. Regenerate "
+            "DELIBERATELY, never automatically, only after a verified intentional rerun "
+            f"of that analysis, by running from the repository root: {_REGENERATION_COMMAND}"
+        ),
+        "n_rows": int(len(df)),
+        "rows": _row_keyed_rows(df, SURCHARGE_MODE_COMPARISON_IDENTITY, SURCHARGE_MODE_COMPARISON_PINNED_FIELDS),
+    }
+
+
 def _write_golden(path: Path, payload: dict) -> None:
     with open(path, "w", encoding="ascii") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
@@ -945,6 +1051,7 @@ def main() -> None:
         (FAMILY_SENSITIVITY_GOLDEN_PATH, _compute_family_sensitivity_pins),
         (DOSE_MATCHED_MONOPOLY_GOLDEN_PATH, _compute_dose_matched_monopoly_pins),
         (SWEEP_DOSE_MATCHED_MONOPOLY_PARQUET_CELL_GOLDEN_PATH, _compute_dose_matched_monopoly_parquet_cell_pins),
+        (SURCHARGE_MODE_COMPARISON_GOLDEN_PATH, _compute_surcharge_mode_comparison_pins),
     ):
         payload = compute()
         if payload is not None:
