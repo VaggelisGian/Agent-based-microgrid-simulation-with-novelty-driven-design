@@ -3,6 +3,10 @@
 # do not upgrade to a 2.x line (different scheduler API) or a much newer 3.x
 # without re-checking the Mesa 3.x API notes in docs/PROJECT_CONTEXT.md.
 mesa==3.5.1
+# mesa's own metadata omits networkx, but `import mesa` pulls in
+# mesa.discrete_space, which imports it unconditionally, so a clean install
+# cannot import mesa without it (docs/verification/reproducibility.md, sec. 2).
+networkx==3.6.1
 numpy==2.4.3
 pandas==2.3.3
 scipy==1.16.2
@@ -13,3 +17,7 @@ pyarrow==20.0.0
 matplotlib==3.10.7
 pytest==8.4.2
 pytest-xdist==3.8.0
+# Optional: only used by a statsmodels cross-check test (importorskip, 3 skips
+# when absent) and a diagnostic in scripts/family_sensitivity.py. Its absence
+# never breaks collection; listed so the cross-check runs on a clean install.
+statsmodels==0.14.5
