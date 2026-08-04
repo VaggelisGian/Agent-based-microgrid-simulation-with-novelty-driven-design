@@ -4,6 +4,7 @@ import math
 import pytest
 
 from microgrid_sim.agents.consumer import Consumer
+from microgrid_sim.agents.prosumer import Prosumer
 from microgrid_sim.brokers.base import Broker
 from microgrid_sim.config.loader import load_config
 from microgrid_sim.environment import metrics
@@ -187,6 +188,65 @@ def test_compute_prosumer_self_sufficiency_nan_when_no_prosumers():
     import math
 
     assert math.isnan(metrics.compute_prosumer_self_sufficiency([]))
+
+
+class _BareProsumerDouble:
+    """Carries only the two attributes Prosumer.self_sufficiency_ratio reads
+    (total_demand_kwh, total_grid_import_kwh), so calling the SHIPPED method
+    against it (Prosumer.self_sufficiency_ratio(double), an unbound call, not
+    an instance built through Prosumer.__init__) exercises metric 4's real
+    per-agent formula directly, without a model/PV/battery/broker fixture that
+    self_sufficiency_ratio never touches anyway. This is deliberately not a
+    Prosumer subclass or a re-implementation: it is the shipped method, called
+    on the minimum state it reads."""
+
+    def __init__(self, total_demand_kwh, total_grid_import_kwh):
+        self.total_demand_kwh = total_demand_kwh
+        self.total_grid_import_kwh = total_grid_import_kwh
+
+
+def test_prosumer_self_sufficiency_ratio_shipped_formula_is_one_minus_import_over_demand():
+    """Phase 20 close-out (weakness 2): docs/verification/surface.md said "all
+    four thesis metrics live" in metrics.py; that was wrong for metric 4, whose
+    per-agent ratio is computed in Prosumer.self_sufficiency_ratio,
+    prosumer.py:90-94, not in this file. metrics.py only averages the values
+    that method returns (compute_prosumer_self_sufficiency, tested above).
+
+    The test right above this one, test_compute_prosumer_self_sufficiency_averages_ratios,
+    uses StubProsumer, which carries its OWN self_sufficiency_ratio method and
+    never calls the shipped one; it proves the averaging logic, not the formula.
+    Before this test, the shipped formula's only coverage was the full-simulation
+    golden pin at tests/test_golden_master.py:369, where it is one contributor to
+    a population-wide average under a real (and therefore hard to hand-verify)
+    scenario. This test pins the formula itself, directly, against hand-computed
+    expected values.
+
+    Verified this bites, applied to the real tree with a verified sha256
+    restore (see the Phase 20 close-out report for the exact hashes): mutating
+    prosumer.py:94 to scale the denominator by 2 --
+    `1.0 - (self.total_grid_import_kwh / (2.0 * self.total_demand_kwh))` --
+    makes this test's first assertion fail (hardcoded expected 0.65, mutated
+    actual 0.825 for the served_mostly_by_grid case below), and the SAME
+    mutation also makes the existing golden pin at
+    tests/test_golden_master.py:369 fail (prosumer_self_sufficiency moves off
+    its pinned value in both the capacity_both and capacity_disabled golden
+    rows), so this test's value is directness and isolation from the rest of
+    the simulation, not catching something the golden pin cannot.
+    """
+    served_mostly_by_grid = _BareProsumerDouble(total_demand_kwh=100.0, total_grid_import_kwh=35.0)
+    assert Prosumer.self_sufficiency_ratio(served_mostly_by_grid) == pytest.approx(0.65, abs=1e-12)
+
+    fully_self_sufficient = _BareProsumerDouble(total_demand_kwh=40.0, total_grid_import_kwh=0.0)
+    assert Prosumer.self_sufficiency_ratio(fully_self_sufficient) == pytest.approx(1.0, abs=1e-12)
+
+    fully_grid_served = _BareProsumerDouble(total_demand_kwh=40.0, total_grid_import_kwh=40.0)
+    assert Prosumer.self_sufficiency_ratio(fully_grid_served) == pytest.approx(0.0, abs=1e-12)
+
+    # total_demand_kwh <= 0.0 guard: a prosumer that never accumulated any
+    # demand (e.g. queried before its first step) is defined as fully
+    # self-sufficient by convention, not nan or a ZeroDivisionError.
+    never_stepped = _BareProsumerDouble(total_demand_kwh=0.0, total_grid_import_kwh=0.0)
+    assert Prosumer.self_sufficiency_ratio(never_stepped) == 1.0
 
 
 def test_compute_metrics_end_to_end_on_short_competitive_run():

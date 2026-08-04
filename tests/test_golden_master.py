@@ -251,13 +251,21 @@ CSV_PIN_PVALUE_REL_TOL = 1e-9
 #     degenerate row in these three files (about 2251x, ~3.35 orders, above
 #     the smaller 4.441e-16 figure the "degenerate paired diff" notes quote
 #     for the paired-mean-diff column specifically).
-#   - below the smallest MEANINGFUL VALUE the same columns ever carry: the
-#     smallest nonzero, non-noise value pinned on any degenerate row (a real
-#     std/CI half-width, not a diff) is 0.003611336532529; 1e-12 sits
-#     about 3.6e9x, ~9.6 orders of magnitude, below it. There is a clean gap
-#     of about 5.4 orders of magnitude between the noise ceiling and the
-#     smallest real value in these files with nothing pinned in between, so
-#     1e-12 cannot be confused for either.
+#   - below the smallest MEANINGFUL VALUE the same columns ever carry, correctly
+#     stated as the BINDING margin (Phase 20 close-out fix; a prior version of
+#     this comment compared 1e-12 to the value directly, which is not the
+#     comparison pytest.approx(rel=..., abs=...) actually makes). The floor
+#     only binds while rel * abs(v) <= abs, i.e. while 1e-9 * abs(v) <= 1e-12,
+#     i.e. while abs(v) <= 1e-3; above that crossover the relative term already
+#     exceeds the floor and decides on its own. The smallest nonzero, non-noise
+#     value pinned on any degenerate row (a real std/CI half-width, not a diff)
+#     is 0.003611336532529, which clears the 1e-3 crossover by ~3.6x
+#     (0.003611336532529 / 1e-3), not by "9.6 orders of magnitude": that
+#     retired figure was 0.003611336532529 / 1e-12, the distance to the floor
+#     ITSELF, a quantity the floor is never actually compared against. There is
+#     still a clean gap of about 5.4 orders of magnitude between the noise
+#     ceiling and the smallest real value in these files with nothing pinned in
+#     between, so 1e-12 cannot be confused for either.
 # Only applied when a row's own degenerate flag is True and the field is
 # nonzero (an exact 0.0 pin still demands exact equality, unaffected by this
 # constant: see _assert_pinned_field). Non-degenerate rows, and every field
@@ -1800,14 +1808,21 @@ def test_degenerate_row_float_kind_survives_noise_but_still_catches_a_regression
     would fail the pin for a value that carries no information.
 
     DEGENERATE_PAIRED_DIFF_ABS_TOL=1e-12 sits about 55x (roughly 1.7 orders of
-    magnitude) above the worst of that observed noise, and about 3.6e9x
-    (roughly 9.6 orders of magnitude) below the smallest real, non-noise value
-    ever pinned in these same columns on a degenerate row (0.003611336532529,
-    a std/CI-half-width figure, not a diff). Both margins are checked here
-    directly, not assumed: a noise-scale drift passes, a regression-scale
-    drift several orders below that real floor still fails, and the SAME
-    tiny magnitude on a row NOT flagged degenerate is unaffected, still held
-    to the plain relative-only rule.
+    magnitude) above the worst of that observed noise. Below, the BINDING
+    margin (Phase 20 close-out fix) is not the floor's raw distance to the
+    smallest real value: pytest.approx(rel=..., abs=...) only lets the floor
+    decide the comparison while rel * abs(v) <= abs, i.e. while
+    1e-9 * abs(v) <= 1e-12, i.e. while abs(v) <= 1e-3; above that crossover
+    the relative term already exceeds the floor on its own. The smallest
+    real, non-noise value ever pinned in these columns on a degenerate row
+    (0.003611336532529, a std/CI-half-width figure, not a diff) clears that
+    1e-3 crossover by about 3.6x, not by "9.6 orders of magnitude" (that
+    retired figure, 0.003611336532529 / 1e-12, measured distance to the floor
+    itself, a comparison the floor is never actually subjected to). Both
+    margins are checked here directly, not assumed: a noise-scale drift
+    passes, a regression-scale drift several orders below that real floor
+    still fails, and the SAME tiny magnitude on a row NOT flagged degenerate
+    is unaffected, still held to the plain relative-only rule.
     """
     real_pin = 1.4802973661668754e-17  # summary_stats.csv, capacity_pnl_only, feeder_peak_to_average_ratio
 
