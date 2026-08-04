@@ -205,15 +205,64 @@ CLEAN_CHANNEL_ABS_TOL = 1e-12
 
 # Tolerance for the pinned CSV digests (items 5 to 8): these compare numbers
 # that were written to a text file and read back, not recomputed, so anything
-# looser would let a real shift through. Correct for the O(1) quantities in
-# these files (means, effect sizes, percent changes), where an absolute floor
-# of 1e-9 is far below anything that could matter.
+# looser would let a real shift through.
+#
+# CSV_PIN_ABS_TOL is NOT used as a floor on the live "float" comparison
+# anymore (see _assert_pinned_field): this suite pins several fields (for
+# example vs_disabled_paired_mean_diff on the capacity_pnl_only reference arm)
+# at values with magnitude well under 1, some as small as 1e-14, where an
+# abs=1e-9 floor would swallow the relative tolerance entirely and let any
+# other value under 1e-9 pass, including zero or the wrong sign. It survives
+# here only because test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals
+# and the per-file "*_pin_bites_on_a_p_value_magnitude_shift" tests use it
+# on purpose, to demonstrate what the OLD rule (rel and abs both 1e-9) would
+# have called equal, immediately before showing the "pvalue" kind's
+# relative-only rule rejects the same pair. Do not reintroduce it into
+# _assert_pinned_field's "float" branch.
 CSV_PIN_REL_TOL = 1e-9
 CSV_PIN_ABS_TOL = 1e-9
 
 # Tolerance for the p-value columns, which get their own kind (see
 # _assert_pvalue_close). Relative only, deliberately: no absolute floor.
 CSV_PIN_PVALUE_REL_TOL = 1e-9
+
+# Absolute floor for "float"-kind pins on rows the DATA ITSELF flags as a
+# degenerate paired diff (vs_disabled_degenerate_paired_diff /
+# degenerate_paired_diff / degenerate: see SUMMARY_STATS_PINNED_FIELDS,
+# EFFECT_SIZES_PINNED_FIELDS, SUMMARY_STATS_CORRECTED_PINNED_FIELDS below).
+# capacity_pnl_only reproduces capacity_disabled bit-for-bit on every physical
+# metric (D6/D7's clean-channel invariant), so on those rows the true paired
+# diff, effect size and CI bounds are analytically exactly 0.0; the nonzero
+# values actually pinned are floating-point subtraction noise, not signal.
+# CSV_PIN_REL_TOL applied to noise of that shape is not a tighter pin, it is a
+# portability trap: a value pinned today at 1.85e-18 would demand agreement to
+# about 1.85e-27 on any machine that regenerates the CSV, and a different
+# numpy/BLAS build re-landing that same analytic zero on a differently-shaped
+# crumb of noise (this file's own "degenerate paired diff" notes record
+# max abs diff up to 4.441e-16 on 3 rows; the worst actual "float"-kind pin
+# this constant has to cover, found by walking every nonzero pinned value on a
+# flagged-degenerate row across summary_stats_pins.json, effect_sizes_pins.json
+# and summary_stats_corrected_pins.json, is vs_disabled_cohens_d_independent at
+# 1.8040993479947777e-14) would fail for a value that carries no information.
+#
+# Both margins, stated as numbers rather than left implicit:
+#   - above the observed noise: 1e-12 / 1.8040993479947777e-14 = ~55x, about
+#     1.7 orders of magnitude above the worst noise actually pinned on any
+#     degenerate row in these three files (about 2251x, ~3.35 orders, above
+#     the smaller 4.441e-16 figure the "degenerate paired diff" notes quote
+#     for the paired-mean-diff column specifically).
+#   - below the smallest MEANINGFUL VALUE the same columns ever carry: the
+#     smallest nonzero, non-noise value pinned on any degenerate row (a real
+#     std/CI half-width, not a diff) is 0.003611336532529; 1e-12 sits
+#     about 3.6e9x, ~9.6 orders of magnitude, below it. There is a clean gap
+#     of about 5.4 orders of magnitude between the noise ceiling and the
+#     smallest real value in these files with nothing pinned in between, so
+#     1e-12 cannot be confused for either.
+# Only applied when a row's own degenerate flag is True and the field is
+# nonzero (an exact 0.0 pin still demands exact equality, unaffected by this
+# constant: see _assert_pinned_field). Non-degenerate rows, and every field
+# on them, are unaffected: this constant is never consulted for them.
+DEGENERATE_PAIRED_DIFF_ABS_TOL = 1e-12
 
 # Tolerance for the parquet-derived deferred-energy aggregates (items 10 and
 # 11 below). A parquet column round-trips its float64 bit pattern exactly, so
@@ -1257,7 +1306,9 @@ def _assert_pvalue_close(actual: float, expected: float, message: str) -> None:
     )
 
 
-def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, context: str) -> None:
+def _assert_pinned_field(
+    actual_row, expected_row, field: str, kind: str, context: str, degenerate: bool = False
+) -> None:
     expected = expected_row[field]
     actual = _plain(actual_row[field])
     if expected is None:
@@ -1265,7 +1316,44 @@ def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, contex
         return
     assert actual is not None, f"{context}: {field} expected {expected!r}, found empty"
     if kind == "float":
-        assert float(actual) == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), f"{context}: {field}"
+        # Relative tolerance only, abs=0, the same rule the "pvalue"/"logsum"
+        # branch below uses. The original abs=CSV_PIN_ABS_TOL (1e-9) floor made
+        # this branch VACUOUS for any pinned value at or under 1 in magnitude,
+        # since pytest.approx passes if EITHER tolerance holds: the effective
+        # tolerance was max(rel*|v|, 1e-9), so a value of order 1e-14 (which
+        # this suite pins routinely, e.g. vs_disabled_paired_mean_diff on the
+        # capacity_pnl_only reference arm, which reproduces capacity_disabled
+        # bit-for-bit and is analytically 0.0) could drift to ANY other value
+        # under 1e-9, including 0 or the wrong sign, and still pass.
+        # A floor is not needed to absorb recomputation noise here: every
+        # "float" field is read out of a CSV via pandas at both pin time
+        # (scripts/regenerate_golden_master.py's own pd.read_csv calls) and
+        # test time, off the SAME on-disk file, so actual and expected are
+        # bit-identical whenever the CSV is unchanged. There is no
+        # cross-process recomputation in this comparison for a floor to
+        # protect against, unlike the bit-exact whole-file digest Phase 11
+        # rejected (see the module docstring, "Deliberately NOT a bit-exact
+        # whole-file digest").
+        # Exact zero gets its own branch for the same reason
+        # _assert_pvalue_close's docstring gives: a relative tolerance around
+        # zero is zero, so letting pytest.approx handle it would demand exact
+        # equality by accident rather than by decision. Demand it deliberately.
+        if expected == 0.0:
+            assert float(actual) == 0.0, f"{context}: {field} pinned exactly 0.0, found {actual!r}"
+        elif degenerate:
+            # This row's own degenerate flag says the true value here is
+            # analytically 0.0 and the pinned nonzero float is floating-point
+            # noise from computing it (see DEGENERATE_PAIRED_DIFF_ABS_TOL's
+            # comment for the two margins). Relative-only would demand
+            # agreement to a fraction of that noise itself, which a differently
+            # rounded but equally noise-only recomputation would fail for no
+            # real reason. An absolute floor here is not a loosening of a real
+            # pin, it is refusing to treat noise as if it were signal.
+            assert float(actual) == pytest.approx(
+                expected, rel=CSV_PIN_REL_TOL, abs=DEGENERATE_PAIRED_DIFF_ABS_TOL
+            ), f"{context}: {field} (degenerate row)"
+        else:
+            assert float(actual) == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=0.0), f"{context}: {field}"
     elif kind in ("pvalue", "logsum"):
         # "logsum" (a sum of log10(p) over a group of rows, possibly large and
         # negative) wants the exact same rule as "pvalue": relative tolerance
@@ -1285,7 +1373,8 @@ def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, contex
 
 
 def _assert_csv_matches_row_keyed_golden(
-    df, golden: dict, identity_columns, pinned_fields, label: str, golden_label: str
+    df, golden: dict, identity_columns, pinned_fields, label: str, golden_label: str,
+    degenerate_flag_field: str | None = None,
 ) -> None:
     """Compare a whole CSV against a row-keyed golden snapshot.
 
@@ -1302,6 +1391,15 @@ def _assert_csv_matches_row_keyed_golden(
     row escapes. Drop golden-side uniqueness and a hand-edited golden file
     carrying one key twice would leave one CSV row entirely unchecked while
     every other assertion here still passed.
+
+    degenerate_flag_field, when given, names the golden row's own boolean
+    column that marks a degenerate paired diff (see
+    DEGENERATE_PAIRED_DIFF_ABS_TOL). Every "float"-kind field on a row where
+    that column is True is compared with the absolute floor appropriate to
+    floating-point noise around an analytic zero, instead of the relative-only
+    rule every other row uses. None (the default) means the file has no such
+    column and every row goes through the relative-only rule unconditionally,
+    the same as before this parameter existed.
     """
     assert len(df) == golden["n_rows"], f"{label}: row count changed ({len(df)} rows, pinned {golden['n_rows']})"
     assert len(golden["rows"]) == golden["n_rows"], f"{label}: golden file is internally inconsistent"
@@ -1321,8 +1419,9 @@ def _assert_csv_matches_row_keyed_golden(
         assert key in actual_rows, f"{label}: missing row for {key}"
         actual_row = actual_rows[key]
         context = f"{label} {key}"
+        is_degenerate = bool(expected_row.get(degenerate_flag_field)) if degenerate_flag_field else False
         for field, kind in pinned_fields.items():
-            _assert_pinned_field(actual_row, expected_row, field, kind, context)
+            _assert_pinned_field(actual_row, expected_row, field, kind, context, degenerate=is_degenerate)
 
 
 def _assert_constant_fields(df, golden: dict, constant_fields, label: str) -> None:
@@ -1340,6 +1439,7 @@ def _assert_summary_stats_matches_golden(df, golden: dict) -> None:
         SUMMARY_STATS_PINNED_FIELDS,
         "results/summary_stats.csv",
         SUMMARY_STATS_GOLDEN_PATH.name,
+        degenerate_flag_field="vs_disabled_degenerate_paired_diff",
     )
 
 
@@ -1379,6 +1479,7 @@ def _assert_effect_sizes_matches_golden(df, golden: dict) -> None:
     _assert_csv_matches_row_keyed_golden(
         df, golden, EFFECT_SIZES_IDENTITY, EFFECT_SIZES_PINNED_FIELDS,
         "results/effect_sizes.csv", EFFECT_SIZES_GOLDEN_PATH.name,
+        degenerate_flag_field="degenerate_paired_diff",
     )
 
 
@@ -1386,6 +1487,7 @@ def _assert_summary_stats_corrected_matches_golden(df, golden: dict) -> None:
     _assert_csv_matches_row_keyed_golden(
         df, golden, SUMMARY_STATS_CORRECTED_IDENTITY, SUMMARY_STATS_CORRECTED_PINNED_FIELDS,
         "results/summary_stats_corrected.csv", SUMMARY_STATS_CORRECTED_GOLDEN_PATH.name,
+        degenerate_flag_field="degenerate",
     )
 
 
@@ -1595,8 +1697,13 @@ def test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals():
     """The "pvalue" kind, checked directly on its comparison helper.
 
     Every mismatched pair below sits entirely under the 1e-9 absolute floor the
-    "float" kind uses, so under that floor all of them compared EQUAL, which is
-    asserted here pair by pair before the new helper is asked to reject them.
+    OLD "float"-kind rule used (CSV_PIN_REL_TOL combined with CSV_PIN_ABS_TOL,
+    which is what a bare pytest.approx(rel=..., abs=...) call still does, see
+    below), so under that floor all of them compared EQUAL, which is asserted
+    here pair by pair before the new helper is asked to reject them. Both the
+    "pvalue" kind and the "float" kind are now relative-only (see
+    _assert_pinned_field), so this floor no longer lives on either live
+    comparison path; it survives here purely to demonstrate what it used to do.
     """
     _assert_pvalue_close(8.930161324964124e-56, 8.930161324964124e-56, "identical")
     _assert_pvalue_close(0.0, 0.0, "exact zero, the case a relative tolerance cannot express")
@@ -1620,6 +1727,136 @@ def test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals():
     _assert_pvalue_close(0.4780556677281509, 0.4780556677281509, "O(1) p-value")
     with pytest.raises(AssertionError):
         _assert_pvalue_close(0.4780556677281509 + 1e-6, 0.4780556677281509, "O(1) p-value drifted")
+
+
+def test_float_kind_comparison_rejects_near_zero_drift_the_old_rule_missed():
+    """The "float" kind, checked directly on _assert_pinned_field (Phase 20.4).
+
+    Real pin, taken verbatim from tests/golden/summary_stats_pins.json: k=1.0,
+    broker_count=3, ablation=capacity_pnl_only, metric=feeder_peak_to_average_ratio,
+    vs_disabled_paired_mean_diff = 1.4802973661668754e-17. This is not a
+    placeholder near-zero value, it is the real pin: capacity_pnl_only debits
+    only the broker ledger and reproduces capacity_disabled's feeder behaviour
+    bit-for-bit (the "notes" column on this row literally says "degenerate
+    paired diff (sd(diff) < 1e-09, max abs diff 4.441e-16)"), so the true
+    difference is floating-point noise around an analytically exact zero.
+
+    Under the OLD rule (rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL, i.e. what a
+    bare pytest.approx(rel=1e-9, abs=1e-9) call does), that pin would have
+    compared equal to a WRONG value carrying the opposite sign and eleven
+    orders of magnitude more weight, -3e-10, because both sit under the 1e-9
+    absolute floor: asserted directly below, reproducing the old bug on this
+    exact pin before the fix is asked to reject it.
+    """
+    real_pin = 1.4802973661668754e-17
+    wrong_value = -3e-10  # opposite sign, 1e7x larger in magnitude, still < 1e-9
+
+    assert wrong_value == pytest.approx(real_pin, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+        "the old rule really did call these two values equal"
+    )
+
+    expected_row = {"vs_disabled_paired_mean_diff": real_pin}
+    correct_row = {"vs_disabled_paired_mean_diff": real_pin}
+    wrong_row = {"vs_disabled_paired_mean_diff": wrong_value}
+
+    _assert_pinned_field(correct_row, expected_row, "vs_disabled_paired_mean_diff", "float", "unperturbed")
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(wrong_row, expected_row, "vs_disabled_paired_mean_diff", "float", "near-zero drift")
+
+    # Exact zero: demanded exactly, not through a relative tolerance that
+    # would be zero regardless of what "actual" is (rel * 0 == 0 for any rel).
+    zero_row = {"vs_disabled_paired_mean_diff": 0.0}
+    tiny_nonzero_row = {"vs_disabled_paired_mean_diff": 1e-15}
+    _assert_pinned_field(zero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, zero found")
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(tiny_nonzero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, drifted")
+
+    # An O(1) float keeps behaving sensibly: identical passes, a drift far
+    # larger than the 1e-9 relative tolerance at this magnitude fails.
+    o1_expected = {"mean": 596.2512997029809}
+    o1_actual = {"mean": 596.2512997029809}
+    o1_drifted = {"mean": 596.2512997029809 + 1e-3}
+    _assert_pinned_field(o1_actual, o1_expected, "mean", "float", "O(1) float")
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(o1_drifted, o1_expected, "mean", "float", "O(1) float drifted")
+
+
+def test_degenerate_row_float_kind_survives_noise_but_still_catches_a_regression():
+    """The relative-only rule above, checked against the SAME real pin used
+    there, is itself over-tight on a row the data flags as a degenerate paired
+    diff (Phase 20.4, review round 2, following request_changes on round 1).
+
+    vs_disabled_paired_mean_diff = 1.4802973661668754e-17 is not a measurement:
+    it is floating-point noise around an analytic zero (capacity_pnl_only
+    reproduces capacity_disabled bit-for-bit; see this row's own
+    vs_disabled_degenerate_paired_diff=True flag and its "notes" column,
+    "degenerate paired diff (sd(diff) < 1e-09, max abs diff 4.441e-16)").
+    Demanding rel=1e-9 relative agreement on pure noise means demanding
+    agreement to about 1.48e-26 absolute: a different numpy/BLAS build
+    landing that same analytic zero on a differently shaped crumb of noise
+    (this project's own observed range for that noise, on this and
+    neighbouring rows, runs from a few times 1e-18 up to 4.441e-16 and, for
+    the related cohens_d_independent column, up to 1.8040993479947777e-14)
+    would fail the pin for a value that carries no information.
+
+    DEGENERATE_PAIRED_DIFF_ABS_TOL=1e-12 sits about 55x (roughly 1.7 orders of
+    magnitude) above the worst of that observed noise, and about 3.6e9x
+    (roughly 9.6 orders of magnitude) below the smallest real, non-noise value
+    ever pinned in these same columns on a degenerate row (0.003611336532529,
+    a std/CI-half-width figure, not a diff). Both margins are checked here
+    directly, not assumed: a noise-scale drift passes, a regression-scale
+    drift several orders below that real floor still fails, and the SAME
+    tiny magnitude on a row NOT flagged degenerate is unaffected, still held
+    to the plain relative-only rule.
+    """
+    real_pin = 1.4802973661668754e-17  # summary_stats.csv, capacity_pnl_only, feeder_peak_to_average_ratio
+
+    # (a) noise-scale drift on the flagged row: now passes, where the
+    #     relative-only rule (the test above) would have rejected it.
+    observed_noise_scale = 4.441e-16  # this row's own "notes" column, verbatim
+    noisy_row = {"vs_disabled_paired_mean_diff": real_pin + observed_noise_scale}
+    expected_row = {"vs_disabled_paired_mean_diff": real_pin}
+    _assert_pinned_field(
+        noisy_row, expected_row, "vs_disabled_paired_mean_diff", "float", "degenerate, noise-scale drift",
+        degenerate=True,
+    )
+
+    # (b) a regression-scale drift on the SAME flagged row still fails: the
+    #     floor widens the pin past noise, it does not turn the pin off.
+    #     1e-6 sits far above DEGENERATE_PAIRED_DIFF_ABS_TOL (1e6x) and far
+    #     below the smallest real value ever pinned in this column family on a
+    #     degenerate row (0.003611336532529, about 3600x below it), so it
+    #     cannot be mistaken for either noise or a legitimate base statistic.
+    regressed_row = {"vs_disabled_paired_mean_diff": real_pin + 1e-6}
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(
+            regressed_row, expected_row, "vs_disabled_paired_mean_diff", "float", "degenerate, regression-scale drift",
+            degenerate=True,
+        )
+
+    # (c) the identical noise-scale drift, same tiny magnitude, on a row NOT
+    #     flagged degenerate: still fails. The floor is gated on the row's own
+    #     flag, not a blanket change to every small "float" pin.
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(
+            noisy_row, expected_row, "vs_disabled_paired_mean_diff", "float", "not degenerate, same drift",
+            degenerate=False,
+        )
+
+    # (d) exact zero is untouched by the degenerate flag either way: still
+    #     exact equality, not a relative tolerance that is zero regardless of
+    #     "actual", and not the new absolute floor either.
+    zero_row = {"vs_disabled_paired_mean_diff": 0.0}
+    tiny_nonzero_row = {"vs_disabled_paired_mean_diff": 1e-15}
+    _assert_pinned_field(
+        zero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, zero found, degenerate",
+        degenerate=True,
+    )
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(
+            tiny_nonzero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, drifted, degenerate",
+            degenerate=True,
+        )
 
 
 def test_every_pvalue_column_in_the_pinned_csvs_uses_the_pvalue_kind():
@@ -1679,15 +1916,18 @@ def test_summary_stats_csv_matches_pinned_digest():
 def test_summary_stats_pin_bites_on_plausible_regressions():
     """Prove the pin above is not vacuous, on in-memory copies only.
 
-    Four regressions specific to this file, none of them shared with the other
+    Five regressions specific to this file, none of them shared with the other
     bite tests: a confidence interval reported the wrong way round, a metric's
     human-readable label detached from its metric key, the reference arm's
     deliberately empty vs_disabled_* cells filled in with zeros (an empty cell
     and a computed 0.0 are different statements, and only the reference arm is
-    entitled to the empty one), and the paired p-value moving far in magnitude
-    while staying under the 1e-9 absolute floor, which is what routing that
-    column through the "pvalue" kind is for. The CSV's own digest is captured
-    before and re-checked after, so the file on disk is provably untouched.
+    entitled to the empty one), the paired p-value moving far in magnitude
+    while staying under the 1e-9 absolute floor (what routing that column
+    through the "pvalue" kind is for), and a near-zero "float"-kind field
+    drifting to a wrong value while staying under that same old floor (what
+    Phase 20.4 fixed _assert_pinned_field's "float" branch for). The CSV's own
+    digest is captured before and re-checked after, so the file on disk is
+    provably untouched.
     """
     _skip_unless_pinned_csv_available(SUMMARY_STATS_CSV_PATH, SUMMARY_STATS_GOLDEN_PATH)
 
@@ -1737,6 +1977,31 @@ def test_summary_stats_pin_bites_on_plausible_regressions():
     moved.loc[smallest, "vs_disabled_paired_p"] = perturbed_to
     with pytest.raises(AssertionError):
         _assert_summary_stats_matches_golden(moved, golden)
+
+    # (e) Phase 20.4: a "float"-kind field pinned near zero (the
+    #     capacity_pnl_only reference arm's vs_disabled_paired_mean_diff,
+    #     floating-point noise around an analytically exact zero, see that
+    #     row's own "degenerate paired diff" note) drifts to a wrong value of
+    #     opposite sign and far larger magnitude, while staying under the old
+    #     1e-9 absolute floor. Before the fix this passed silently, the same
+    #     shape of bug the pvalue kind was fixed for in (d) above, just on the
+    #     "float" kind instead.
+    drifted = df.copy(deep=True)
+    near_zero = drifted.index[
+        (drifted["ablation"] == "capacity_pnl_only")
+        & (drifted["vs_disabled_paired_mean_diff"].abs() > 0.0)
+        & (drifted["vs_disabled_paired_mean_diff"].abs() < 1e-9)
+    ]
+    assert len(near_zero) > 0, "expected at least one capacity_pnl_only row with a nonzero near-zero mean diff"
+    row = near_zero[0]
+    original = float(drifted.loc[row, "vs_disabled_paired_mean_diff"])
+    wrong_value = -3e-10  # opposite sign, orders of magnitude larger, still < 1e-9
+    assert wrong_value == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+        f"the old rule really would call {original!r} and {wrong_value!r} equal"
+    )
+    drifted.loc[row, "vs_disabled_paired_mean_diff"] = wrong_value
+    with pytest.raises(AssertionError):
+        _assert_summary_stats_matches_golden(drifted, golden)
 
     assert _sha256(SUMMARY_STATS_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
 
@@ -4457,3 +4722,381 @@ def test_regeneration_script_import_does_not_write_golden_files():
 
     mtimes_after = {path: path.stat().st_mtime_ns for path in golden_paths}
     assert mtimes_after == mtimes_before, "importing the regeneration script rewrote a golden file"
+
+
+# ---------------------------------------------------------------------------
+# Phase 20 item 20.6: the rest of the twin inventory.
+#
+# test_the_two_metrics_dict_twins_emit_the_same_keys and
+# test_the_twinned_pin_shape_constants_agree_between_this_module_and_the_script
+# above only cover _metrics_dict by name and the *_IDENTITY/*_PINNED_FIELDS/
+# etc. constant pairs that happen to share a name between the two modules. A
+# mechanical grep pass for "same name in both modules" turns up several more
+# functions that independently build a dict, a row, or an aggregate from
+# scratch in each module, several of them ALREADY carrying a docstring that
+# says "Twin of the same-named function in ..." with no test behind that
+# sentence: _dose_matched_monopoly_parquet_cell_aggregates, _family_
+# sensitivity_aggregate_row (constant-shape checked already, never
+# behaviour-checked), _label_combo_counts, and _scenario_config, the last of
+# which is the harder case the constant-suffix guard cannot see AT ALL: the
+# two modules read their horizon/seed/num_agents from DIFFERENTLY NAMED
+# constants (SHORT_HORIZON_HOURS/SHORT_NUM_AGENTS/SHORT_SEED here,
+# SHORT_RUN_HORIZON_HOURS/SHORT_RUN_NUM_AGENTS/SHORT_RUN_SEED in the script),
+# so a guard keyed on shared constant NAMES would never even look at them.
+# Every test below compares the two sides' ACTUAL OUTPUT on a shared input,
+# not a third hardcoded list of expected fields (a third list is exactly how
+# the _metrics_dict gap happened: two lists that were each individually
+# "obviously right").
+# ---------------------------------------------------------------------------
+
+
+def test_the_two_scenario_config_twins_build_the_same_config():
+    """_scenario_config exists under the SAME NAME in both modules but pulls
+    its horizon/seed/num_agents from DIFFERENTLY NAMED constants in each
+    (see the module comment above): test_the_twinned_pin_shape_constants_
+    agree_between_this_module_and_the_script only compares constants that
+    share a name, so this pair is invisible to it in both directions. If the
+    regeneration script's SHORT_RUN_* constants ever drift from this module's
+    SHORT_HORIZON_HOURS/SHORT_NUM_AGENTS/SHORT_SEED, the regenerated
+    short_deterministic_run.json would describe a run this module's own
+    tests never execute, and nothing would say so until someone compared the
+    two by hand.
+    """
+    module = _import_regeneration_script()
+    for name in ("capacity_both", "capacity_disabled", "capacity_pnl_only", "capacity_pricing_only"):
+        here = _scenario_config(name)
+        there = module._scenario_config(name)
+        assert here == there, (
+            f"_scenario_config({name!r}) differs between tests/test_golden_master.py and "
+            "scripts/regenerate_golden_master.py: the short-run golden pin would then be computed "
+            "from a different config than the one this module's own short-run tests execute."
+        )
+
+
+def _synthetic_family_sensitivity_group():
+    """A tiny, hand-built stand-in for a results/family_sensitivity.csv
+    group: two rows, every LABEL_COMBO_COLUMNS and p-value field given a
+    distinct, recognisable value (never repeated across the two rows), so a
+    twin that read the right field off the wrong column would show up as a
+    value mismatch rather than accidentally cancelling out. Row 2's
+    p_uncorrected sits below P_VALUE_LOG_FLOOR on purpose, so the floor branch
+    of _log10_with_floor is exercised by this fixture too, not just the
+    plain-log branch.
+    """
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "family_key": "fkey_a",
+                "scope": "scope_a",
+                "source": "source_a",
+                "k": 0.5,
+                "broker_count": 2,
+                "ablation": "capacity_both",
+                "cell_is_stamped_not_native": False,
+                "metric": "metric_a",
+                "test_id": "test_a",
+                "is_headline_72": True,
+                "survives_holm_alpha05": True,
+                "survives_bh_alpha05": False,
+                "degenerate": False,
+                "p_uncorrected": 0.011,
+                "p_holm": 0.022,
+                "p_bh": 0.033,
+            },
+            {
+                "family_key": "fkey_b",
+                "scope": "scope_b",
+                "source": "source_b",
+                "k": 1.0,
+                "broker_count": 3,
+                "ablation": "capacity_disabled",
+                "cell_is_stamped_not_native": True,
+                "metric": "metric_b",
+                "test_id": "test_b",
+                "is_headline_72": False,
+                "survives_holm_alpha05": False,
+                "survives_bh_alpha05": True,
+                "degenerate": True,
+                "p_uncorrected": 1e-320,  # below P_VALUE_LOG_FLOOR: exercises the floor branch
+                "p_holm": 0.55,
+                "p_bh": 0.66,
+            },
+        ]
+    )
+
+
+def test_the_two_family_sensitivity_aggregate_row_twins_compute_identically():
+    """_family_sensitivity_aggregate_row's own docstring, in both modules,
+    already says "Twin of the same-named function in ...; must compute
+    identically or the golden snapshot stops describing what this checks" --
+    a claim that test_the_twinned_pin_shape_constants_agree_... never
+    actually tests, because that test only compares the FIELD-NAME constants
+    (FAMILY_SENSITIVITY_AGGREGATE_FIELDS etc.), not the two functions' output.
+    A twin that dropped a field from its declared constant would be caught
+    there; a twin whose FUNCTION BODY quietly computed the right-named field
+    the wrong way (median instead of mean, e.g., or the wrong column) would
+    not be. This test calls both on the same input and checks keys, then
+    values, mirroring test_the_two_metrics_dict_twins_emit_the_same_keys'
+    own two-stage shape.
+    """
+    module = _import_regeneration_script()
+    group = _synthetic_family_sensitivity_group()
+
+    here = _family_sensitivity_aggregate_row(group)
+    there = module._family_sensitivity_aggregate_row(group)
+    assert set(here) == set(there), (
+        "the two _family_sensitivity_aggregate_row twins no longer emit the same keys "
+        f"(only in tests/test_golden_master.py: {sorted(set(here) - set(there))}; "
+        f"only in scripts/regenerate_golden_master.py: {sorted(set(there) - set(here))})"
+    )
+    assert here == there, (
+        "the two _family_sensitivity_aggregate_row twins emit the same keys but disagree on a value "
+        "for an identical input group"
+    )
+
+
+def _synthetic_label_combo_rows():
+    """Three rows for testing _label_combo_key directly: two ordinary rows with
+    every LABEL_COMBO_COLUMNS value populated and distinct from each other,
+    plus a third row with several columns missing (None), mirroring a real
+    family_summary row (metric/ablation/is_headline_72 are legitimately empty
+    there; see LABEL_COMBO_COLUMNS's own comment above). The third row
+    exercises the _MISSING_TOKEN branch of _identity_token on both twins, not
+    just the plain-string branch _synthetic_family_sensitivity_group's two
+    rows already cover.
+    """
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "family_key": "fkey_a",
+                "scope": "scope_a",
+                "source": "source_a",
+                "k": 0.5,
+                "broker_count": 2,
+                "ablation": "capacity_both",
+                "cell_is_stamped_not_native": False,
+                "metric": "metric_a",
+                "test_id": "test_a",
+                "is_headline_72": True,
+            },
+            {
+                "family_key": "fkey_b",
+                "scope": "scope_b",
+                "source": "source_b",
+                "k": 1.0,
+                "broker_count": 3,
+                "ablation": "capacity_disabled",
+                "cell_is_stamped_not_native": True,
+                "metric": "metric_b",
+                "test_id": "test_b",
+                "is_headline_72": False,
+            },
+            {
+                "family_key": "fkey_c",
+                "scope": "scope_c",
+                "source": "source_c",
+                "k": None,
+                "broker_count": None,
+                "ablation": None,
+                "cell_is_stamped_not_native": True,
+                "metric": None,
+                "test_id": "test_c",
+                "is_headline_72": None,
+            },
+        ]
+    )
+
+
+def test_the_two_label_combo_key_twins_compute_identically():
+    """_label_combo_key is the tenth shared name between this module and
+    scripts/regenerate_golden_master.py (docs/verification/regeneration.md,
+    Task 2). Until this test, it was covered only TRANSITIVELY, through
+    test_the_two_label_combo_counts_twins_compute_identically below: that test
+    would catch a divergence here only as a side effect (a changed key changes
+    which bucket a row's count lands in), never by asserting on this
+    function's own return value. Compared here on each row of a small,
+    hand-built frame directly, including one row with several
+    LABEL_COMBO_COLUMNS values missing, so the _MISSING_TOKEN branch of
+    _identity_token is exercised on both sides too, not just the plain-string
+    branch.
+    """
+    module = _import_regeneration_script()
+    rows = _synthetic_label_combo_rows()
+
+    for _, row in rows.iterrows():
+        here = _label_combo_key(row)
+        there = module._label_combo_key(row)
+        assert here == there, (
+            f"the two _label_combo_key twins disagree for row {row.to_dict()!r}: "
+            f"{here!r} (tests/test_golden_master.py) vs {there!r} (scripts/regenerate_golden_master.py)"
+        )
+
+
+def test_the_two_label_combo_counts_twins_compute_identically():
+    """_label_combo_counts carries the same "Twin of the same-named function"
+    docstring claim as _family_sensitivity_aggregate_row and is never called
+    directly by any existing test on both sides at once (only transitively,
+    inside _family_sensitivity_aggregate_row's own "label_counts" field).
+    Tested directly here so a divergence in this function alone, with
+    everything else in the row unaffected, is attributed correctly instead of
+    only showing up as a generic "some field differs" failure one level up.
+    """
+    module = _import_regeneration_script()
+    group = _synthetic_family_sensitivity_group()
+
+    here = _label_combo_counts(group)
+    there = module._label_combo_counts(group)
+    assert here == there, (
+        "the two _label_combo_counts twins disagree on the label multiset for an identical input group"
+    )
+
+
+def _synthetic_dose_matched_monopoly_cell_df():
+    """A tiny, hand-built stand-in for results/sweep_dose_matched_monopoly.parquet:
+    four rows across two (k, capacity_surcharge_divisor, ablation) cells, every
+    metric column given a distinct, recognisable value per row so a twin that
+    aggregated the wrong column (or the wrong reduction) shows up as a value
+    mismatch rather than cancelling out against the other rows in its cell.
+    The first cell carries THREE seeds with a deliberately skewed
+    total_deferred_kwh (111, 222, 999) so that cell's mean (444.0) and median
+    (222.0) differ: a twin that silently aggregated with "median" instead of
+    "mean" (a plausible near-miss, not merely a renamed column) would pass
+    undetected against a symmetric two-point cell, where mean and median
+    always coincide.
+    """
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "k": 0.5,
+                "capacity_surcharge_divisor": 2,
+                "ablation": "capacity_both",
+                "seed": 1,
+                "total_deferred_kwh": 111.0,
+                "feeder_peak_to_average_ratio": 2.2,
+                "feeder_coefficient_of_variation": 0.31,
+                "avg_cost_per_agent_eur": 11.1,
+                "capacity_fire_rate": 0.11,
+                "total_capacity_charge_eur": 5.5,
+            },
+            {
+                "k": 0.5,
+                "capacity_surcharge_divisor": 2,
+                "ablation": "capacity_both",
+                "seed": 2,
+                "total_deferred_kwh": 222.0,
+                "feeder_peak_to_average_ratio": 3.3,
+                "feeder_coefficient_of_variation": 0.42,
+                "avg_cost_per_agent_eur": 22.2,
+                "capacity_fire_rate": 0.22,
+                "total_capacity_charge_eur": 6.6,
+            },
+            {
+                "k": 0.5,
+                "capacity_surcharge_divisor": 2,
+                "ablation": "capacity_both",
+                "seed": 3,
+                "total_deferred_kwh": 999.0,
+                "feeder_peak_to_average_ratio": 5.5,
+                "feeder_coefficient_of_variation": 0.64,
+                "avg_cost_per_agent_eur": 44.4,
+                "capacity_fire_rate": 0.44,
+                "total_capacity_charge_eur": 8.8,
+            },
+            {
+                "k": 1.0,
+                "capacity_surcharge_divisor": 3,
+                "ablation": "capacity_disabled",
+                "seed": 1,
+                "total_deferred_kwh": 333.0,
+                "feeder_peak_to_average_ratio": 4.4,
+                "feeder_coefficient_of_variation": 0.53,
+                "avg_cost_per_agent_eur": 33.3,
+                "capacity_fire_rate": 0.33,
+                "total_capacity_charge_eur": 7.7,
+            },
+        ]
+    )
+
+
+def test_the_two_dose_matched_monopoly_parquet_cell_aggregates_twins_compute_identically():
+    """Same gap as _family_sensitivity_aggregate_row: this function's own
+    docstring in both modules already claims "Twin of the same-named
+    function in ...; must compute identically", and
+    test_the_twinned_pin_shape_constants_agree_... only checks the shared
+    DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY / _FIELDS constants (the
+    column NAMES), never the groupby/agg body that fills them in. Both twins
+    are run on the same synthetic frame here and compared column-set first,
+    then value-by-value, row order normalised by sorting on the identity
+    columns first (groupby's own output order is not part of either twin's
+    contract).
+    """
+    module = _import_regeneration_script()
+    df = _synthetic_dose_matched_monopoly_cell_df()
+
+    here = _dose_matched_monopoly_parquet_cell_aggregates(df.copy(deep=True))
+    there = module._dose_matched_monopoly_parquet_cell_aggregates(df.copy(deep=True))
+
+    assert list(here.columns) == list(there.columns), (
+        "the two _dose_matched_monopoly_parquet_cell_aggregates twins no longer emit the same "
+        f"column set (tests/test_golden_master.py: {list(here.columns)}; "
+        f"scripts/regenerate_golden_master.py: {list(there.columns)})"
+    )
+    identity_cols = list(DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY)
+    here_records = here.sort_values(identity_cols).reset_index(drop=True).to_dict("records")
+    there_records = there.sort_values(identity_cols).reset_index(drop=True).to_dict("records")
+    assert here_records == there_records, (
+        "the two _dose_matched_monopoly_parquet_cell_aggregates twins emit the same columns but "
+        "disagree on a computed value for an identical input frame"
+    )
+
+
+def test_the_plain_identity_token_as_bool_and_log10_with_floor_twins_agree():
+    """The four smallest shared-name helpers (_plain, _identity_token,
+    _as_bool, _log10_with_floor) are value-transform utilities rather than
+    dict/row/column-set builders, so they sit outside this file's other twin
+    tests' focus, but they are still independently DEFINED TWICE, and every
+    pinned value that passes through _row_keyed_rows / _pinned_value on the
+    script side and _rows_by_identity / _identity_token on the test side
+    passes through one of them first. A silent divergence here (e.g. one side
+    stops collapsing NaN to None, or the two floors disagree) would corrupt
+    values upstream of every row-keyed golden comparison in this module, not
+    just one pin, so it is checked directly rather than assumed identical
+    from a source-reading alone.
+    """
+    module = _import_regeneration_script()
+
+    for value in (None, float("nan"), 3.5, "hello", True, False, 0, -1):
+        here_plain = _plain(value)
+        there_plain = module._plain(value)
+        # Phase 20.4: this used to read
+        # "here_plain == there_plain or (here_plain is None and there_plain is
+        # None)". The second disjunct is a strict subset of the first (both
+        # None implies None == None, which is already True), so it never
+        # rescued a genuine mismatch and never will: _plain's whole job is to
+        # collapse NaN to None (see its own docstring) before this comparison
+        # runs, so neither side is ever NaN here for the "or" to matter.
+        # Confirmed directly: replacing either twin's _plain with a stub that
+        # returns float("nan") instead of None still fails on plain equality
+        # alone. Dropped as dead weight, not a correctness fix.
+        assert here_plain == there_plain, (
+            f"_plain twins disagree for input {value!r}: {here_plain!r} vs {there_plain!r}"
+        )
+
+    for value in (None, float("nan"), 3.5, "hello", "ALL", True, False, 0):
+        assert _identity_token(value) == module._identity_token(value), (
+            f"_identity_token twins disagree for input {value!r}"
+        )
+
+    for value in (True, False, "True", "False"):
+        assert _as_bool(value) == module._as_bool(value), f"_as_bool twins disagree for input {value!r}"
+
+    for value in (1.0, 0.5, 1e-10, 1e-300, 1e-320):
+        assert _log10_with_floor(value) == module._log10_with_floor(value), (
+            f"_log10_with_floor twins disagree for input {value!r}"
+        )
