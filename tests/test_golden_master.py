@@ -205,9 +205,20 @@ CLEAN_CHANNEL_ABS_TOL = 1e-12
 
 # Tolerance for the pinned CSV digests (items 5 to 8): these compare numbers
 # that were written to a text file and read back, not recomputed, so anything
-# looser would let a real shift through. Correct for the O(1) quantities in
-# these files (means, effect sizes, percent changes), where an absolute floor
-# of 1e-9 is far below anything that could matter.
+# looser would let a real shift through.
+#
+# CSV_PIN_ABS_TOL is NOT used as a floor on the live "float" comparison
+# anymore (see _assert_pinned_field): this suite pins several fields (for
+# example vs_disabled_paired_mean_diff on the capacity_pnl_only reference arm)
+# at values with magnitude well under 1, some as small as 1e-14, where an
+# abs=1e-9 floor would swallow the relative tolerance entirely and let any
+# other value under 1e-9 pass, including zero or the wrong sign. It survives
+# here only because test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals
+# and the per-file "*_pin_bites_on_a_p_value_magnitude_shift" tests use it
+# on purpose, to demonstrate what the OLD rule (rel and abs both 1e-9) would
+# have called equal, immediately before showing the "pvalue" kind's
+# relative-only rule rejects the same pair. Do not reintroduce it into
+# _assert_pinned_field's "float" branch.
 CSV_PIN_REL_TOL = 1e-9
 CSV_PIN_ABS_TOL = 1e-9
 
@@ -1265,7 +1276,32 @@ def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, contex
         return
     assert actual is not None, f"{context}: {field} expected {expected!r}, found empty"
     if kind == "float":
-        assert float(actual) == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), f"{context}: {field}"
+        # Relative tolerance only, abs=0, the same rule the "pvalue"/"logsum"
+        # branch below uses. The original abs=CSV_PIN_ABS_TOL (1e-9) floor made
+        # this branch VACUOUS for any pinned value at or under 1 in magnitude,
+        # since pytest.approx passes if EITHER tolerance holds: the effective
+        # tolerance was max(rel*|v|, 1e-9), so a value of order 1e-14 (which
+        # this suite pins routinely, e.g. vs_disabled_paired_mean_diff on the
+        # capacity_pnl_only reference arm, which reproduces capacity_disabled
+        # bit-for-bit and is analytically 0.0) could drift to ANY other value
+        # under 1e-9, including 0 or the wrong sign, and still pass.
+        # A floor is not needed to absorb recomputation noise here: every
+        # "float" field is read out of a CSV via pandas at both pin time
+        # (scripts/regenerate_golden_master.py's own pd.read_csv calls) and
+        # test time, off the SAME on-disk file, so actual and expected are
+        # bit-identical whenever the CSV is unchanged. There is no
+        # cross-process recomputation in this comparison for a floor to
+        # protect against, unlike the bit-exact whole-file digest Phase 11
+        # rejected (see the module docstring, "Deliberately NOT a bit-exact
+        # whole-file digest").
+        # Exact zero gets its own branch for the same reason
+        # _assert_pvalue_close's docstring gives: a relative tolerance around
+        # zero is zero, so letting pytest.approx handle it would demand exact
+        # equality by accident rather than by decision. Demand it deliberately.
+        if expected == 0.0:
+            assert float(actual) == 0.0, f"{context}: {field} pinned exactly 0.0, found {actual!r}"
+        else:
+            assert float(actual) == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=0.0), f"{context}: {field}"
     elif kind in ("pvalue", "logsum"):
         # "logsum" (a sum of log10(p) over a group of rows, possibly large and
         # negative) wants the exact same rule as "pvalue": relative tolerance
@@ -1595,8 +1631,13 @@ def test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals():
     """The "pvalue" kind, checked directly on its comparison helper.
 
     Every mismatched pair below sits entirely under the 1e-9 absolute floor the
-    "float" kind uses, so under that floor all of them compared EQUAL, which is
-    asserted here pair by pair before the new helper is asked to reject them.
+    OLD "float"-kind rule used (CSV_PIN_REL_TOL combined with CSV_PIN_ABS_TOL,
+    which is what a bare pytest.approx(rel=..., abs=...) call still does, see
+    below), so under that floor all of them compared EQUAL, which is asserted
+    here pair by pair before the new helper is asked to reject them. Both the
+    "pvalue" kind and the "float" kind are now relative-only (see
+    _assert_pinned_field), so this floor no longer lives on either live
+    comparison path; it survives here purely to demonstrate what it used to do.
     """
     _assert_pvalue_close(8.930161324964124e-56, 8.930161324964124e-56, "identical")
     _assert_pvalue_close(0.0, 0.0, "exact zero, the case a relative tolerance cannot express")
@@ -1620,6 +1661,58 @@ def test_pvalue_comparison_pins_magnitude_and_handles_zero_and_denormals():
     _assert_pvalue_close(0.4780556677281509, 0.4780556677281509, "O(1) p-value")
     with pytest.raises(AssertionError):
         _assert_pvalue_close(0.4780556677281509 + 1e-6, 0.4780556677281509, "O(1) p-value drifted")
+
+
+def test_float_kind_comparison_rejects_near_zero_drift_the_old_rule_missed():
+    """The "float" kind, checked directly on _assert_pinned_field (Phase 20.4).
+
+    Real pin, taken verbatim from tests/golden/summary_stats_pins.json: k=1.0,
+    broker_count=3, ablation=capacity_pnl_only, metric=feeder_peak_to_average_ratio,
+    vs_disabled_paired_mean_diff = 1.4802973661668754e-17. This is not a
+    placeholder near-zero value, it is the real pin: capacity_pnl_only debits
+    only the broker ledger and reproduces capacity_disabled's feeder behaviour
+    bit-for-bit (the "notes" column on this row literally says "degenerate
+    paired diff (sd(diff) < 1e-09, max abs diff 4.441e-16)"), so the true
+    difference is floating-point noise around an analytically exact zero.
+
+    Under the OLD rule (rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL, i.e. what a
+    bare pytest.approx(rel=1e-9, abs=1e-9) call does), that pin would have
+    compared equal to a WRONG value carrying the opposite sign and eleven
+    orders of magnitude more weight, -3e-10, because both sit under the 1e-9
+    absolute floor: asserted directly below, reproducing the old bug on this
+    exact pin before the fix is asked to reject it.
+    """
+    real_pin = 1.4802973661668754e-17
+    wrong_value = -3e-10  # opposite sign, 1e7x larger in magnitude, still < 1e-9
+
+    assert wrong_value == pytest.approx(real_pin, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+        "the old rule really did call these two values equal"
+    )
+
+    expected_row = {"vs_disabled_paired_mean_diff": real_pin}
+    correct_row = {"vs_disabled_paired_mean_diff": real_pin}
+    wrong_row = {"vs_disabled_paired_mean_diff": wrong_value}
+
+    _assert_pinned_field(correct_row, expected_row, "vs_disabled_paired_mean_diff", "float", "unperturbed")
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(wrong_row, expected_row, "vs_disabled_paired_mean_diff", "float", "near-zero drift")
+
+    # Exact zero: demanded exactly, not through a relative tolerance that
+    # would be zero regardless of what "actual" is (rel * 0 == 0 for any rel).
+    zero_row = {"vs_disabled_paired_mean_diff": 0.0}
+    tiny_nonzero_row = {"vs_disabled_paired_mean_diff": 1e-15}
+    _assert_pinned_field(zero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, zero found")
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(tiny_nonzero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, drifted")
+
+    # An O(1) float keeps behaving sensibly: identical passes, a drift far
+    # larger than the 1e-9 relative tolerance at this magnitude fails.
+    o1_expected = {"mean": 596.2512997029809}
+    o1_actual = {"mean": 596.2512997029809}
+    o1_drifted = {"mean": 596.2512997029809 + 1e-3}
+    _assert_pinned_field(o1_actual, o1_expected, "mean", "float", "O(1) float")
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(o1_drifted, o1_expected, "mean", "float", "O(1) float drifted")
 
 
 def test_every_pvalue_column_in_the_pinned_csvs_uses_the_pvalue_kind():
@@ -1679,15 +1772,18 @@ def test_summary_stats_csv_matches_pinned_digest():
 def test_summary_stats_pin_bites_on_plausible_regressions():
     """Prove the pin above is not vacuous, on in-memory copies only.
 
-    Four regressions specific to this file, none of them shared with the other
+    Five regressions specific to this file, none of them shared with the other
     bite tests: a confidence interval reported the wrong way round, a metric's
     human-readable label detached from its metric key, the reference arm's
     deliberately empty vs_disabled_* cells filled in with zeros (an empty cell
     and a computed 0.0 are different statements, and only the reference arm is
-    entitled to the empty one), and the paired p-value moving far in magnitude
-    while staying under the 1e-9 absolute floor, which is what routing that
-    column through the "pvalue" kind is for. The CSV's own digest is captured
-    before and re-checked after, so the file on disk is provably untouched.
+    entitled to the empty one), the paired p-value moving far in magnitude
+    while staying under the 1e-9 absolute floor (what routing that column
+    through the "pvalue" kind is for), and a near-zero "float"-kind field
+    drifting to a wrong value while staying under that same old floor (what
+    Phase 20.4 fixed _assert_pinned_field's "float" branch for). The CSV's own
+    digest is captured before and re-checked after, so the file on disk is
+    provably untouched.
     """
     _skip_unless_pinned_csv_available(SUMMARY_STATS_CSV_PATH, SUMMARY_STATS_GOLDEN_PATH)
 
@@ -1737,6 +1833,31 @@ def test_summary_stats_pin_bites_on_plausible_regressions():
     moved.loc[smallest, "vs_disabled_paired_p"] = perturbed_to
     with pytest.raises(AssertionError):
         _assert_summary_stats_matches_golden(moved, golden)
+
+    # (e) Phase 20.4: a "float"-kind field pinned near zero (the
+    #     capacity_pnl_only reference arm's vs_disabled_paired_mean_diff,
+    #     floating-point noise around an analytically exact zero, see that
+    #     row's own "degenerate paired diff" note) drifts to a wrong value of
+    #     opposite sign and far larger magnitude, while staying under the old
+    #     1e-9 absolute floor. Before the fix this passed silently, the same
+    #     shape of bug the pvalue kind was fixed for in (d) above, just on the
+    #     "float" kind instead.
+    drifted = df.copy(deep=True)
+    near_zero = drifted.index[
+        (drifted["ablation"] == "capacity_pnl_only")
+        & (drifted["vs_disabled_paired_mean_diff"].abs() > 0.0)
+        & (drifted["vs_disabled_paired_mean_diff"].abs() < 1e-9)
+    ]
+    assert len(near_zero) > 0, "expected at least one capacity_pnl_only row with a nonzero near-zero mean diff"
+    row = near_zero[0]
+    original = float(drifted.loc[row, "vs_disabled_paired_mean_diff"])
+    wrong_value = -3e-10  # opposite sign, orders of magnitude larger, still < 1e-9
+    assert wrong_value == pytest.approx(original, rel=CSV_PIN_REL_TOL, abs=CSV_PIN_ABS_TOL), (
+        f"the old rule really would call {original!r} and {wrong_value!r} equal"
+    )
+    drifted.loc[row, "vs_disabled_paired_mean_diff"] = wrong_value
+    with pytest.raises(AssertionError):
+        _assert_summary_stats_matches_golden(drifted, golden)
 
     assert _sha256(SUMMARY_STATS_CSV_PATH) == digest_before, "bite test must not touch the CSV on disk"
 
@@ -4592,6 +4713,85 @@ def test_the_two_family_sensitivity_aggregate_row_twins_compute_identically():
     )
 
 
+def _synthetic_label_combo_rows():
+    """Three rows for testing _label_combo_key directly: two ordinary rows with
+    every LABEL_COMBO_COLUMNS value populated and distinct from each other,
+    plus a third row with several columns missing (None), mirroring a real
+    family_summary row (metric/ablation/is_headline_72 are legitimately empty
+    there; see LABEL_COMBO_COLUMNS's own comment above). The third row
+    exercises the _MISSING_TOKEN branch of _identity_token on both twins, not
+    just the plain-string branch _synthetic_family_sensitivity_group's two
+    rows already cover.
+    """
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "family_key": "fkey_a",
+                "scope": "scope_a",
+                "source": "source_a",
+                "k": 0.5,
+                "broker_count": 2,
+                "ablation": "capacity_both",
+                "cell_is_stamped_not_native": False,
+                "metric": "metric_a",
+                "test_id": "test_a",
+                "is_headline_72": True,
+            },
+            {
+                "family_key": "fkey_b",
+                "scope": "scope_b",
+                "source": "source_b",
+                "k": 1.0,
+                "broker_count": 3,
+                "ablation": "capacity_disabled",
+                "cell_is_stamped_not_native": True,
+                "metric": "metric_b",
+                "test_id": "test_b",
+                "is_headline_72": False,
+            },
+            {
+                "family_key": "fkey_c",
+                "scope": "scope_c",
+                "source": "source_c",
+                "k": None,
+                "broker_count": None,
+                "ablation": None,
+                "cell_is_stamped_not_native": True,
+                "metric": None,
+                "test_id": "test_c",
+                "is_headline_72": None,
+            },
+        ]
+    )
+
+
+def test_the_two_label_combo_key_twins_compute_identically():
+    """_label_combo_key is the tenth shared name between this module and
+    scripts/regenerate_golden_master.py (docs/verification/regeneration.md,
+    Task 2). Until this test, it was covered only TRANSITIVELY, through
+    test_the_two_label_combo_counts_twins_compute_identically below: that test
+    would catch a divergence here only as a side effect (a changed key changes
+    which bucket a row's count lands in), never by asserting on this
+    function's own return value. Compared here on each row of a small,
+    hand-built frame directly, including one row with several
+    LABEL_COMBO_COLUMNS values missing, so the _MISSING_TOKEN branch of
+    _identity_token is exercised on both sides too, not just the plain-string
+    branch.
+    """
+    module = _import_regeneration_script()
+    rows = _synthetic_label_combo_rows()
+
+    for _, row in rows.iterrows():
+        here = _label_combo_key(row)
+        there = module._label_combo_key(row)
+        assert here == there, (
+            f"the two _label_combo_key twins disagree for row {row.to_dict()!r}: "
+            f"{here!r} (tests/test_golden_master.py) vs {there!r} (scripts/regenerate_golden_master.py)"
+        )
+
+
 def test_the_two_label_combo_counts_twins_compute_identically():
     """_label_combo_counts carries the same "Twin of the same-named function"
     docstring claim as _family_sensitivity_aggregate_row and is never called
@@ -4730,7 +4930,17 @@ def test_the_plain_identity_token_as_bool_and_log10_with_floor_twins_agree():
     for value in (None, float("nan"), 3.5, "hello", True, False, 0, -1):
         here_plain = _plain(value)
         there_plain = module._plain(value)
-        assert here_plain == there_plain or (here_plain is None and there_plain is None), (
+        # Phase 20.4: this used to read
+        # "here_plain == there_plain or (here_plain is None and there_plain is
+        # None)". The second disjunct is a strict subset of the first (both
+        # None implies None == None, which is already True), so it never
+        # rescued a genuine mismatch and never will: _plain's whole job is to
+        # collapse NaN to None (see its own docstring) before this comparison
+        # runs, so neither side is ever NaN here for the "or" to matter.
+        # Confirmed directly: replacing either twin's _plain with a stub that
+        # returns float("nan") instead of None still fails on plain equality
+        # alone. Dropped as dead weight, not a correctness fix.
+        assert here_plain == there_plain, (
             f"_plain twins disagree for input {value!r}: {here_plain!r} vs {there_plain!r}"
         )
 
