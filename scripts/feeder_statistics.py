@@ -55,8 +55,8 @@ from, not as a second, competing definition):
     over hours 01:00-04:00, i.e. hour-of-day in {1,2,3,4}, divided by the
     profile's own peak). The four-hour reading (not three) was checked
     against the appendix's own printed baseline value (0.709) and is the one
-    that reproduces it; see docs/verification/demo_instrumentation.md for
-    the check.
+    that reproduces it; that comparison is the whole check, not repeated
+    elsewhere in the repo.
   - Calendar month of each hour: hour_of_year // 24 is the (0-indexed) day of
     a non-leap 365-day year starting at hour 0 = January 1st 00:00 (matching
     data/loaders.py's own day_of_year = (hour_index // 24) % 365 convention,
@@ -96,9 +96,9 @@ from, not as a second, competing definition):
 SMOKE RUN
 
 A full run is two 8760-hour simulations (baseline, capacity_both); measured
-well over 60 seconds combined (see docs/verification/demo_instrumentation.md),
-so the pytest test that checks the full run is marked slow and skipped by
-default. A short "smoke" horizon covers everything except the
+532.65 seconds combined for the two full-year runs (docs/PROGRESS.md, Phase
+20.7), so the pytest test that checks the full run is marked slow and
+skipped by default. A short "smoke" horizon covers everything except the
 calendar-season fields (month_of_peak_hour, winter_mean_kwh, summer_mean_kwh,
 winter_summer_ratio), which are legitimately undefined (JSON null) over a
 horizon of only a few hundred hours starting at hour 0 (all within January,
@@ -109,11 +109,10 @@ CLI
 
     python scripts/feeder_statistics.py [--horizon-hours N] [--out PATH] [--regenerate [PATH]]
 
-Mirrors scripts/demo_instrumentation.py's CLI shape (see that script's
-docstring for the reasoning): --out writes the single-run JSON alongside
-stdout; --regenerate runs build_pins() (both the full and smoke horizons,
-both configs) and writes the combined pins file, independent of
---horizon-hours.
+Two output modes: a single run's JSON, printed to stdout and, if --out is
+given, also written to that path; or, via --regenerate, build_pins() run for
+both the full and smoke horizons and both configs, with the combined pins
+file written out, independent of --horizon-hours.
 """
 
 from __future__ import annotations
@@ -145,10 +144,10 @@ CONFIG_PATHS = {
     "capacity_both": _REPO_ROOT / "config" / "scenarios" / "capacity_both.yaml",
 }
 
-# Single source of truth for the per-run field list; see
-# scripts/demo_instrumentation.py's FIELD_NAMES docstring note for why this
-# matters (the tests/test_golden_master.py _metrics_dict twin defect,
-# docs/PROGRESS.md "19.3").
+# Single source of truth for the per-run field list: tests/test_golden_master.py's
+# _metrics_dict once duplicated this list by hand and drifted out of sync
+# with it (docs/PROGRESS.md "19.3"); iterating FIELD_NAMES instead of
+# retyping it avoids that twin-defect risk here.
 FIELD_NAMES = (
     "horizon_hours",
     "num_agents",
@@ -174,8 +173,9 @@ FIELD_NAMES = (
 
 # Metadata and quantities that are exact integers/counts by construction;
 # everything else is a computed ratio/mean and is compared by relative
-# tolerance only in the test module (never rel AND abs together: see
-# scripts/demo_instrumentation.py's EXACT_FIELDS comment for the hazard).
+# tolerance only in the test module (never rel AND abs together: pytest.approx
+# treats rel and abs as an OR, not an AND, so pairing both on one field
+# weakens the check by silently widening the effective tolerance).
 EXACT_FIELDS = frozenset({"horizon_hours", "num_agents", "seed", "hour_of_daily_peak", "hour_of_daily_trough", "month_of_peak_hour"})
 REL_TOLERANCE_FIELDS = frozenset(FIELD_NAMES) - EXACT_FIELDS
 
