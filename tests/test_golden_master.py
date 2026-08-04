@@ -226,6 +226,44 @@ CSV_PIN_ABS_TOL = 1e-9
 # _assert_pvalue_close). Relative only, deliberately: no absolute floor.
 CSV_PIN_PVALUE_REL_TOL = 1e-9
 
+# Absolute floor for "float"-kind pins on rows the DATA ITSELF flags as a
+# degenerate paired diff (vs_disabled_degenerate_paired_diff /
+# degenerate_paired_diff / degenerate: see SUMMARY_STATS_PINNED_FIELDS,
+# EFFECT_SIZES_PINNED_FIELDS, SUMMARY_STATS_CORRECTED_PINNED_FIELDS below).
+# capacity_pnl_only reproduces capacity_disabled bit-for-bit on every physical
+# metric (D6/D7's clean-channel invariant), so on those rows the true paired
+# diff, effect size and CI bounds are analytically exactly 0.0; the nonzero
+# values actually pinned are floating-point subtraction noise, not signal.
+# CSV_PIN_REL_TOL applied to noise of that shape is not a tighter pin, it is a
+# portability trap: a value pinned today at 1.85e-18 would demand agreement to
+# about 1.85e-27 on any machine that regenerates the CSV, and a different
+# numpy/BLAS build re-landing that same analytic zero on a differently-shaped
+# crumb of noise (this file's own "degenerate paired diff" notes record
+# max abs diff up to 4.441e-16 on 3 rows; the worst actual "float"-kind pin
+# this constant has to cover, found by walking every nonzero pinned value on a
+# flagged-degenerate row across summary_stats_pins.json, effect_sizes_pins.json
+# and summary_stats_corrected_pins.json, is vs_disabled_cohens_d_independent at
+# 1.8040993479947777e-14) would fail for a value that carries no information.
+#
+# Both margins, stated as numbers rather than left implicit:
+#   - above the observed noise: 1e-12 / 1.8040993479947777e-14 = ~55x, about
+#     1.7 orders of magnitude above the worst noise actually pinned on any
+#     degenerate row in these three files (about 2251x, ~3.35 orders, above
+#     the smaller 4.441e-16 figure the "degenerate paired diff" notes quote
+#     for the paired-mean-diff column specifically).
+#   - below the smallest MEANINGFUL VALUE the same columns ever carry: the
+#     smallest nonzero, non-noise value pinned on any degenerate row (a real
+#     std/CI half-width, not a diff) is 0.003611336532529; 1e-12 sits
+#     about 3.6e9x, ~9.6 orders of magnitude, below it. There is a clean gap
+#     of about 5.4 orders of magnitude between the noise ceiling and the
+#     smallest real value in these files with nothing pinned in between, so
+#     1e-12 cannot be confused for either.
+# Only applied when a row's own degenerate flag is True and the field is
+# nonzero (an exact 0.0 pin still demands exact equality, unaffected by this
+# constant: see _assert_pinned_field). Non-degenerate rows, and every field
+# on them, are unaffected: this constant is never consulted for them.
+DEGENERATE_PAIRED_DIFF_ABS_TOL = 1e-12
+
 # Tolerance for the parquet-derived deferred-energy aggregates (items 10 and
 # 11 below). A parquet column round-trips its float64 bit pattern exactly, so
 # a groupby mean recomputed from it is deterministic to the last bit, unlike a
@@ -1268,7 +1306,9 @@ def _assert_pvalue_close(actual: float, expected: float, message: str) -> None:
     )
 
 
-def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, context: str) -> None:
+def _assert_pinned_field(
+    actual_row, expected_row, field: str, kind: str, context: str, degenerate: bool = False
+) -> None:
     expected = expected_row[field]
     actual = _plain(actual_row[field])
     if expected is None:
@@ -1300,6 +1340,18 @@ def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, contex
         # equality by accident rather than by decision. Demand it deliberately.
         if expected == 0.0:
             assert float(actual) == 0.0, f"{context}: {field} pinned exactly 0.0, found {actual!r}"
+        elif degenerate:
+            # This row's own degenerate flag says the true value here is
+            # analytically 0.0 and the pinned nonzero float is floating-point
+            # noise from computing it (see DEGENERATE_PAIRED_DIFF_ABS_TOL's
+            # comment for the two margins). Relative-only would demand
+            # agreement to a fraction of that noise itself, which a differently
+            # rounded but equally noise-only recomputation would fail for no
+            # real reason. An absolute floor here is not a loosening of a real
+            # pin, it is refusing to treat noise as if it were signal.
+            assert float(actual) == pytest.approx(
+                expected, rel=CSV_PIN_REL_TOL, abs=DEGENERATE_PAIRED_DIFF_ABS_TOL
+            ), f"{context}: {field} (degenerate row)"
         else:
             assert float(actual) == pytest.approx(expected, rel=CSV_PIN_REL_TOL, abs=0.0), f"{context}: {field}"
     elif kind in ("pvalue", "logsum"):
@@ -1321,7 +1373,8 @@ def _assert_pinned_field(actual_row, expected_row, field: str, kind: str, contex
 
 
 def _assert_csv_matches_row_keyed_golden(
-    df, golden: dict, identity_columns, pinned_fields, label: str, golden_label: str
+    df, golden: dict, identity_columns, pinned_fields, label: str, golden_label: str,
+    degenerate_flag_field: str | None = None,
 ) -> None:
     """Compare a whole CSV against a row-keyed golden snapshot.
 
@@ -1338,6 +1391,15 @@ def _assert_csv_matches_row_keyed_golden(
     row escapes. Drop golden-side uniqueness and a hand-edited golden file
     carrying one key twice would leave one CSV row entirely unchecked while
     every other assertion here still passed.
+
+    degenerate_flag_field, when given, names the golden row's own boolean
+    column that marks a degenerate paired diff (see
+    DEGENERATE_PAIRED_DIFF_ABS_TOL). Every "float"-kind field on a row where
+    that column is True is compared with the absolute floor appropriate to
+    floating-point noise around an analytic zero, instead of the relative-only
+    rule every other row uses. None (the default) means the file has no such
+    column and every row goes through the relative-only rule unconditionally,
+    the same as before this parameter existed.
     """
     assert len(df) == golden["n_rows"], f"{label}: row count changed ({len(df)} rows, pinned {golden['n_rows']})"
     assert len(golden["rows"]) == golden["n_rows"], f"{label}: golden file is internally inconsistent"
@@ -1357,8 +1419,9 @@ def _assert_csv_matches_row_keyed_golden(
         assert key in actual_rows, f"{label}: missing row for {key}"
         actual_row = actual_rows[key]
         context = f"{label} {key}"
+        is_degenerate = bool(expected_row.get(degenerate_flag_field)) if degenerate_flag_field else False
         for field, kind in pinned_fields.items():
-            _assert_pinned_field(actual_row, expected_row, field, kind, context)
+            _assert_pinned_field(actual_row, expected_row, field, kind, context, degenerate=is_degenerate)
 
 
 def _assert_constant_fields(df, golden: dict, constant_fields, label: str) -> None:
@@ -1376,6 +1439,7 @@ def _assert_summary_stats_matches_golden(df, golden: dict) -> None:
         SUMMARY_STATS_PINNED_FIELDS,
         "results/summary_stats.csv",
         SUMMARY_STATS_GOLDEN_PATH.name,
+        degenerate_flag_field="vs_disabled_degenerate_paired_diff",
     )
 
 
@@ -1415,6 +1479,7 @@ def _assert_effect_sizes_matches_golden(df, golden: dict) -> None:
     _assert_csv_matches_row_keyed_golden(
         df, golden, EFFECT_SIZES_IDENTITY, EFFECT_SIZES_PINNED_FIELDS,
         "results/effect_sizes.csv", EFFECT_SIZES_GOLDEN_PATH.name,
+        degenerate_flag_field="degenerate_paired_diff",
     )
 
 
@@ -1422,6 +1487,7 @@ def _assert_summary_stats_corrected_matches_golden(df, golden: dict) -> None:
     _assert_csv_matches_row_keyed_golden(
         df, golden, SUMMARY_STATS_CORRECTED_IDENTITY, SUMMARY_STATS_CORRECTED_PINNED_FIELDS,
         "results/summary_stats_corrected.csv", SUMMARY_STATS_CORRECTED_GOLDEN_PATH.name,
+        degenerate_flag_field="degenerate",
     )
 
 
@@ -1713,6 +1779,84 @@ def test_float_kind_comparison_rejects_near_zero_drift_the_old_rule_missed():
     _assert_pinned_field(o1_actual, o1_expected, "mean", "float", "O(1) float")
     with pytest.raises(AssertionError):
         _assert_pinned_field(o1_drifted, o1_expected, "mean", "float", "O(1) float drifted")
+
+
+def test_degenerate_row_float_kind_survives_noise_but_still_catches_a_regression():
+    """The relative-only rule above, checked against the SAME real pin used
+    there, is itself over-tight on a row the data flags as a degenerate paired
+    diff (Phase 20.4, review round 2, following request_changes on round 1).
+
+    vs_disabled_paired_mean_diff = 1.4802973661668754e-17 is not a measurement:
+    it is floating-point noise around an analytic zero (capacity_pnl_only
+    reproduces capacity_disabled bit-for-bit; see this row's own
+    vs_disabled_degenerate_paired_diff=True flag and its "notes" column,
+    "degenerate paired diff (sd(diff) < 1e-09, max abs diff 4.441e-16)").
+    Demanding rel=1e-9 relative agreement on pure noise means demanding
+    agreement to about 1.48e-26 absolute: a different numpy/BLAS build
+    landing that same analytic zero on a differently shaped crumb of noise
+    (this project's own observed range for that noise, on this and
+    neighbouring rows, runs from a few times 1e-18 up to 4.441e-16 and, for
+    the related cohens_d_independent column, up to 1.8040993479947777e-14)
+    would fail the pin for a value that carries no information.
+
+    DEGENERATE_PAIRED_DIFF_ABS_TOL=1e-12 sits about 55x (roughly 1.7 orders of
+    magnitude) above the worst of that observed noise, and about 3.6e9x
+    (roughly 9.6 orders of magnitude) below the smallest real, non-noise value
+    ever pinned in these same columns on a degenerate row (0.003611336532529,
+    a std/CI-half-width figure, not a diff). Both margins are checked here
+    directly, not assumed: a noise-scale drift passes, a regression-scale
+    drift several orders below that real floor still fails, and the SAME
+    tiny magnitude on a row NOT flagged degenerate is unaffected, still held
+    to the plain relative-only rule.
+    """
+    real_pin = 1.4802973661668754e-17  # summary_stats.csv, capacity_pnl_only, feeder_peak_to_average_ratio
+
+    # (a) noise-scale drift on the flagged row: now passes, where the
+    #     relative-only rule (the test above) would have rejected it.
+    observed_noise_scale = 4.441e-16  # this row's own "notes" column, verbatim
+    noisy_row = {"vs_disabled_paired_mean_diff": real_pin + observed_noise_scale}
+    expected_row = {"vs_disabled_paired_mean_diff": real_pin}
+    _assert_pinned_field(
+        noisy_row, expected_row, "vs_disabled_paired_mean_diff", "float", "degenerate, noise-scale drift",
+        degenerate=True,
+    )
+
+    # (b) a regression-scale drift on the SAME flagged row still fails: the
+    #     floor widens the pin past noise, it does not turn the pin off.
+    #     1e-6 sits far above DEGENERATE_PAIRED_DIFF_ABS_TOL (1e6x) and far
+    #     below the smallest real value ever pinned in this column family on a
+    #     degenerate row (0.003611336532529, about 3600x below it), so it
+    #     cannot be mistaken for either noise or a legitimate base statistic.
+    regressed_row = {"vs_disabled_paired_mean_diff": real_pin + 1e-6}
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(
+            regressed_row, expected_row, "vs_disabled_paired_mean_diff", "float", "degenerate, regression-scale drift",
+            degenerate=True,
+        )
+
+    # (c) the identical noise-scale drift, same tiny magnitude, on a row NOT
+    #     flagged degenerate: still fails. The floor is gated on the row's own
+    #     flag, not a blanket change to every small "float" pin.
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(
+            noisy_row, expected_row, "vs_disabled_paired_mean_diff", "float", "not degenerate, same drift",
+            degenerate=False,
+        )
+
+    # (d) exact zero is untouched by the degenerate flag either way: still
+    #     exact equality, not a relative tolerance that is zero regardless of
+    #     "actual", and not the new absolute floor either.
+    zero_row = {"vs_disabled_paired_mean_diff": 0.0}
+    tiny_nonzero_row = {"vs_disabled_paired_mean_diff": 1e-15}
+    _assert_pinned_field(
+        zero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, zero found, degenerate",
+        degenerate=True,
+    )
+    with pytest.raises(AssertionError):
+        _assert_pinned_field(
+            tiny_nonzero_row, zero_row, "vs_disabled_paired_mean_diff", "float", "zero pinned, drifted, degenerate",
+            degenerate=True,
+        )
 
 
 def test_every_pvalue_column_in_the_pinned_csvs_uses_the_pvalue_kind():
