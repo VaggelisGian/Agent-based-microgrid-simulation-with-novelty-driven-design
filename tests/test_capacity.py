@@ -350,6 +350,61 @@ def test_surcharge_strictly_monotone_in_contribution_share():
     assert result.surcharges_eur_per_kwh["small"] == pytest.approx(0.2 * (30.0 / 100.0), abs=1e-12)
 
 
+def test_allocation_is_strictly_proportional_to_contribution_share_not_merely_ordered():
+    """Phase 20 close-out (weakness 1): pins the STATED MECHANISM, not a reported
+    number. docs/DECISIONS.md:1351 and docs/thesis/defense_slides.md:76 both assert
+    the P&L allocation (capacity.py:173-176) is STRICTLY PROPORTIONAL to each
+    broker's contribution share. No test in this suite asserted the RATIO before
+    this one: test_allocations_sum_to_total_when_positive_contribution_exists checks
+    only sum-to-total and the zero floor on a non-positive contributor, and
+    test_surcharge_strictly_monotone_in_contribution_share pins the exact formula
+    for the PRICING channel (surcharges_eur_per_kwh) on two brokers, not the P&L
+    channel (allocations_eur) this test covers, and not on three DISTINCT shares
+    where an equal-share coincidence could hide a wrong rule. An adversarial audit
+    found the gap directly: replacing capacity.py:174's
+    `contribution / sum_positive_contrib` with a squared-share rule
+    (`contribution**2 / sum(contribution**2 for ...)`) preserves the sum-to-total
+    property, the zero floor, and "brokers get different charges", and the whole
+    469-test suite still passed. Verified standalone (outside the repo, against a
+    copy of capacity.py, not the shipped file) that this test's own ratio assertion
+    fails under exactly that substitution, and also under an equal-split rule
+    (1/n): see the Phase 20 close-out report for the harness and its output.
+
+    Three brokers, three DISTINCT contributions (10.0, 20.0, 30.0; sum 60.0),
+    constructed so total_charge_eur is also 60.0 (charge_rate 1.0, excess 60.0 by
+    the window/threshold setup below), so the shipped proportional rule returns
+    the contributions themselves: (10.0, 20.0, 30.0). For contrast (not asserted,
+    stated so a reader can see the rules disagree): the squared-share rule would
+    give (60*100/1400, 60*400/1400, 60*900/1400) -- concretely (4.286, 17.143, 38.571); an
+    equal split would give (20.0, 20.0, 20.0). All three preserve ordering
+    (a < b < c, or tie for equal-split) and sum to 60.0; only the per-broker
+    ratio -- allocation / total_charge compared against contribution / total
+    contribution -- distinguishes them, which is exactly what this test checks,
+    per broker, not in aggregate.
+
+    Note honestly: no REPORTED number moves under the squared-share mutation.
+    Per-broker cumulative_capacity_charge_eur is never written to a results CSV
+    (only the run-level total_charge_eur and fire_rate are, via
+    compute_capacity_audit), and debit_capacity_charge (the P&L channel this
+    line feeds) touches neither broker revenue nor any quoted price. This test
+    pins a STATED MECHANISM, not a figure that appears in the thesis text.
+    """
+    window = 2
+    mechanism = CapacityMechanism(window=window, k=0.0, charge_rate_eur_per_kwh=1.0, capacity_passthrough=0.1)
+    mechanism.step(0.0, {"a": 0.0, "b": 0.0, "c": 0.0})  # fills the window; window-not-filled zeroes everything
+    result = mechanism.step(120.0, {"a": 10.0, "b": 20.0, "c": 30.0})
+
+    assert result.total_charge_eur == pytest.approx(60.0, abs=1e-9)  # construction sanity, not the claim itself
+    total_contribution = 10.0 + 20.0 + 30.0
+
+    for broker_id, contribution in (("a", 10.0), ("b", 20.0), ("c", 30.0)):
+        expected_ratio = contribution / total_contribution
+        actual_ratio = result.allocations_eur[broker_id] / result.total_charge_eur
+        assert actual_ratio == pytest.approx(expected_ratio, abs=1e-12), (
+            f"broker {broker_id}: allocation/total_charge ratio does not match contribution/total_contribution"
+        )
+
+
 # ---------------------------------------------------------------------------
 # CapacityMechanism.fire_rate() directly. Everywhere else in this suite the
 # fire rate is only ever read off a finished model run, and only ever asserted
