@@ -51,11 +51,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Outside the repo entirely, per the phase brief. tempfile.gettempdir() resolves to
-# C:\Users\<user>\AppData\Local\Temp on this machine, so this is exactly
-# C:\Users\<user>\AppData\Local\Temp\claude\phase20_mutation\tree without hardcoding
-# a username. Always wiped and recopied at the start of a run (prepare_scratch_tree),
-# so nothing from a previous run's mutated state can leak into the next.
-SCRATCH_ROOT = Path(tempfile.gettempdir()) / "claude" / "phase20_mutation" / "tree"
+# C:\Users\<user>\AppData\Local\Temp on this machine, so the scratch tree lands under
+# the system temp directory without hardcoding a username. Always wiped and recopied
+# at the start of a run (prepare_scratch_tree), so nothing from a previous run's
+# mutated state can leak into the next.
+SCRATCH_ROOT = Path(tempfile.gettempdir()) / "microgrid_mutation_scratch" / "tree"
 
 # The thesis's own student ID (see docs/PROJECT_CONTEXT.md): fixed, memorable,
 # documented. Used only to seed the deterministic down-sampling in allocate_budget's
