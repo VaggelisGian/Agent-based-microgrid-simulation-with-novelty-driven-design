@@ -4457,3 +4457,292 @@ def test_regeneration_script_import_does_not_write_golden_files():
 
     mtimes_after = {path: path.stat().st_mtime_ns for path in golden_paths}
     assert mtimes_after == mtimes_before, "importing the regeneration script rewrote a golden file"
+
+
+# ---------------------------------------------------------------------------
+# Phase 20 item 20.6: the rest of the twin inventory.
+#
+# test_the_two_metrics_dict_twins_emit_the_same_keys and
+# test_the_twinned_pin_shape_constants_agree_between_this_module_and_the_script
+# above only cover _metrics_dict by name and the *_IDENTITY/*_PINNED_FIELDS/
+# etc. constant pairs that happen to share a name between the two modules. A
+# mechanical grep pass for "same name in both modules" turns up several more
+# functions that independently build a dict, a row, or an aggregate from
+# scratch in each module, several of them ALREADY carrying a docstring that
+# says "Twin of the same-named function in ..." with no test behind that
+# sentence: _dose_matched_monopoly_parquet_cell_aggregates, _family_
+# sensitivity_aggregate_row (constant-shape checked already, never
+# behaviour-checked), _label_combo_counts, and _scenario_config, the last of
+# which is the harder case the constant-suffix guard cannot see AT ALL: the
+# two modules read their horizon/seed/num_agents from DIFFERENTLY NAMED
+# constants (SHORT_HORIZON_HOURS/SHORT_NUM_AGENTS/SHORT_SEED here,
+# SHORT_RUN_HORIZON_HOURS/SHORT_RUN_NUM_AGENTS/SHORT_RUN_SEED in the script),
+# so a guard keyed on shared constant NAMES would never even look at them.
+# Every test below compares the two sides' ACTUAL OUTPUT on a shared input,
+# not a third hardcoded list of expected fields (a third list is exactly how
+# the _metrics_dict gap happened: two lists that were each individually
+# "obviously right").
+# ---------------------------------------------------------------------------
+
+
+def test_the_two_scenario_config_twins_build_the_same_config():
+    """_scenario_config exists under the SAME NAME in both modules but pulls
+    its horizon/seed/num_agents from DIFFERENTLY NAMED constants in each
+    (see the module comment above): test_the_twinned_pin_shape_constants_
+    agree_between_this_module_and_the_script only compares constants that
+    share a name, so this pair is invisible to it in both directions. If the
+    regeneration script's SHORT_RUN_* constants ever drift from this module's
+    SHORT_HORIZON_HOURS/SHORT_NUM_AGENTS/SHORT_SEED, the regenerated
+    short_deterministic_run.json would describe a run this module's own
+    tests never execute, and nothing would say so until someone compared the
+    two by hand.
+    """
+    module = _import_regeneration_script()
+    for name in ("capacity_both", "capacity_disabled", "capacity_pnl_only", "capacity_pricing_only"):
+        here = _scenario_config(name)
+        there = module._scenario_config(name)
+        assert here == there, (
+            f"_scenario_config({name!r}) differs between tests/test_golden_master.py and "
+            "scripts/regenerate_golden_master.py: the short-run golden pin would then be computed "
+            "from a different config than the one this module's own short-run tests execute."
+        )
+
+
+def _synthetic_family_sensitivity_group():
+    """A tiny, hand-built stand-in for a results/family_sensitivity.csv
+    group: two rows, every LABEL_COMBO_COLUMNS and p-value field given a
+    distinct, recognisable value (never repeated across the two rows), so a
+    twin that read the right field off the wrong column would show up as a
+    value mismatch rather than accidentally cancelling out. Row 2's
+    p_uncorrected sits below P_VALUE_LOG_FLOOR on purpose, so the floor branch
+    of _log10_with_floor is exercised by this fixture too, not just the
+    plain-log branch.
+    """
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "family_key": "fkey_a",
+                "scope": "scope_a",
+                "source": "source_a",
+                "k": 0.5,
+                "broker_count": 2,
+                "ablation": "capacity_both",
+                "cell_is_stamped_not_native": False,
+                "metric": "metric_a",
+                "test_id": "test_a",
+                "is_headline_72": True,
+                "survives_holm_alpha05": True,
+                "survives_bh_alpha05": False,
+                "degenerate": False,
+                "p_uncorrected": 0.011,
+                "p_holm": 0.022,
+                "p_bh": 0.033,
+            },
+            {
+                "family_key": "fkey_b",
+                "scope": "scope_b",
+                "source": "source_b",
+                "k": 1.0,
+                "broker_count": 3,
+                "ablation": "capacity_disabled",
+                "cell_is_stamped_not_native": True,
+                "metric": "metric_b",
+                "test_id": "test_b",
+                "is_headline_72": False,
+                "survives_holm_alpha05": False,
+                "survives_bh_alpha05": True,
+                "degenerate": True,
+                "p_uncorrected": 1e-320,  # below P_VALUE_LOG_FLOOR: exercises the floor branch
+                "p_holm": 0.55,
+                "p_bh": 0.66,
+            },
+        ]
+    )
+
+
+def test_the_two_family_sensitivity_aggregate_row_twins_compute_identically():
+    """_family_sensitivity_aggregate_row's own docstring, in both modules,
+    already says "Twin of the same-named function in ...; must compute
+    identically or the golden snapshot stops describing what this checks" --
+    a claim that test_the_twinned_pin_shape_constants_agree_... never
+    actually tests, because that test only compares the FIELD-NAME constants
+    (FAMILY_SENSITIVITY_AGGREGATE_FIELDS etc.), not the two functions' output.
+    A twin that dropped a field from its declared constant would be caught
+    there; a twin whose FUNCTION BODY quietly computed the right-named field
+    the wrong way (median instead of mean, e.g., or the wrong column) would
+    not be. This test calls both on the same input and checks keys, then
+    values, mirroring test_the_two_metrics_dict_twins_emit_the_same_keys'
+    own two-stage shape.
+    """
+    module = _import_regeneration_script()
+    group = _synthetic_family_sensitivity_group()
+
+    here = _family_sensitivity_aggregate_row(group)
+    there = module._family_sensitivity_aggregate_row(group)
+    assert set(here) == set(there), (
+        "the two _family_sensitivity_aggregate_row twins no longer emit the same keys "
+        f"(only in tests/test_golden_master.py: {sorted(set(here) - set(there))}; "
+        f"only in scripts/regenerate_golden_master.py: {sorted(set(there) - set(here))})"
+    )
+    assert here == there, (
+        "the two _family_sensitivity_aggregate_row twins emit the same keys but disagree on a value "
+        "for an identical input group"
+    )
+
+
+def test_the_two_label_combo_counts_twins_compute_identically():
+    """_label_combo_counts carries the same "Twin of the same-named function"
+    docstring claim as _family_sensitivity_aggregate_row and is never called
+    directly by any existing test on both sides at once (only transitively,
+    inside _family_sensitivity_aggregate_row's own "label_counts" field).
+    Tested directly here so a divergence in this function alone, with
+    everything else in the row unaffected, is attributed correctly instead of
+    only showing up as a generic "some field differs" failure one level up.
+    """
+    module = _import_regeneration_script()
+    group = _synthetic_family_sensitivity_group()
+
+    here = _label_combo_counts(group)
+    there = module._label_combo_counts(group)
+    assert here == there, (
+        "the two _label_combo_counts twins disagree on the label multiset for an identical input group"
+    )
+
+
+def _synthetic_dose_matched_monopoly_cell_df():
+    """A tiny, hand-built stand-in for results/sweep_dose_matched_monopoly.parquet:
+    four rows across two (k, capacity_surcharge_divisor, ablation) cells, every
+    metric column given a distinct, recognisable value per row so a twin that
+    aggregated the wrong column (or the wrong reduction) shows up as a value
+    mismatch rather than cancelling out against the other rows in its cell.
+    The first cell carries THREE seeds with a deliberately skewed
+    total_deferred_kwh (111, 222, 999) so that cell's mean (444.0) and median
+    (222.0) differ: a twin that silently aggregated with "median" instead of
+    "mean" (a plausible near-miss, not merely a renamed column) would pass
+    undetected against a symmetric two-point cell, where mean and median
+    always coincide.
+    """
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {
+                "k": 0.5,
+                "capacity_surcharge_divisor": 2,
+                "ablation": "capacity_both",
+                "seed": 1,
+                "total_deferred_kwh": 111.0,
+                "feeder_peak_to_average_ratio": 2.2,
+                "feeder_coefficient_of_variation": 0.31,
+                "avg_cost_per_agent_eur": 11.1,
+                "capacity_fire_rate": 0.11,
+                "total_capacity_charge_eur": 5.5,
+            },
+            {
+                "k": 0.5,
+                "capacity_surcharge_divisor": 2,
+                "ablation": "capacity_both",
+                "seed": 2,
+                "total_deferred_kwh": 222.0,
+                "feeder_peak_to_average_ratio": 3.3,
+                "feeder_coefficient_of_variation": 0.42,
+                "avg_cost_per_agent_eur": 22.2,
+                "capacity_fire_rate": 0.22,
+                "total_capacity_charge_eur": 6.6,
+            },
+            {
+                "k": 0.5,
+                "capacity_surcharge_divisor": 2,
+                "ablation": "capacity_both",
+                "seed": 3,
+                "total_deferred_kwh": 999.0,
+                "feeder_peak_to_average_ratio": 5.5,
+                "feeder_coefficient_of_variation": 0.64,
+                "avg_cost_per_agent_eur": 44.4,
+                "capacity_fire_rate": 0.44,
+                "total_capacity_charge_eur": 8.8,
+            },
+            {
+                "k": 1.0,
+                "capacity_surcharge_divisor": 3,
+                "ablation": "capacity_disabled",
+                "seed": 1,
+                "total_deferred_kwh": 333.0,
+                "feeder_peak_to_average_ratio": 4.4,
+                "feeder_coefficient_of_variation": 0.53,
+                "avg_cost_per_agent_eur": 33.3,
+                "capacity_fire_rate": 0.33,
+                "total_capacity_charge_eur": 7.7,
+            },
+        ]
+    )
+
+
+def test_the_two_dose_matched_monopoly_parquet_cell_aggregates_twins_compute_identically():
+    """Same gap as _family_sensitivity_aggregate_row: this function's own
+    docstring in both modules already claims "Twin of the same-named
+    function in ...; must compute identically", and
+    test_the_twinned_pin_shape_constants_agree_... only checks the shared
+    DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY / _FIELDS constants (the
+    column NAMES), never the groupby/agg body that fills them in. Both twins
+    are run on the same synthetic frame here and compared column-set first,
+    then value-by-value, row order normalised by sorting on the identity
+    columns first (groupby's own output order is not part of either twin's
+    contract).
+    """
+    module = _import_regeneration_script()
+    df = _synthetic_dose_matched_monopoly_cell_df()
+
+    here = _dose_matched_monopoly_parquet_cell_aggregates(df.copy(deep=True))
+    there = module._dose_matched_monopoly_parquet_cell_aggregates(df.copy(deep=True))
+
+    assert list(here.columns) == list(there.columns), (
+        "the two _dose_matched_monopoly_parquet_cell_aggregates twins no longer emit the same "
+        f"column set (tests/test_golden_master.py: {list(here.columns)}; "
+        f"scripts/regenerate_golden_master.py: {list(there.columns)})"
+    )
+    identity_cols = list(DOSE_MATCHED_MONOPOLY_PARQUET_CELL_IDENTITY)
+    here_records = here.sort_values(identity_cols).reset_index(drop=True).to_dict("records")
+    there_records = there.sort_values(identity_cols).reset_index(drop=True).to_dict("records")
+    assert here_records == there_records, (
+        "the two _dose_matched_monopoly_parquet_cell_aggregates twins emit the same columns but "
+        "disagree on a computed value for an identical input frame"
+    )
+
+
+def test_the_plain_identity_token_as_bool_and_log10_with_floor_twins_agree():
+    """The four smallest shared-name helpers (_plain, _identity_token,
+    _as_bool, _log10_with_floor) are value-transform utilities rather than
+    dict/row/column-set builders, so they sit outside this file's other twin
+    tests' focus, but they are still independently DEFINED TWICE, and every
+    pinned value that passes through _row_keyed_rows / _pinned_value on the
+    script side and _rows_by_identity / _identity_token on the test side
+    passes through one of them first. A silent divergence here (e.g. one side
+    stops collapsing NaN to None, or the two floors disagree) would corrupt
+    values upstream of every row-keyed golden comparison in this module, not
+    just one pin, so it is checked directly rather than assumed identical
+    from a source-reading alone.
+    """
+    module = _import_regeneration_script()
+
+    for value in (None, float("nan"), 3.5, "hello", True, False, 0, -1):
+        here_plain = _plain(value)
+        there_plain = module._plain(value)
+        assert here_plain == there_plain or (here_plain is None and there_plain is None), (
+            f"_plain twins disagree for input {value!r}: {here_plain!r} vs {there_plain!r}"
+        )
+
+    for value in (None, float("nan"), 3.5, "hello", "ALL", True, False, 0):
+        assert _identity_token(value) == module._identity_token(value), (
+            f"_identity_token twins disagree for input {value!r}"
+        )
+
+    for value in (True, False, "True", "False"):
+        assert _as_bool(value) == module._as_bool(value), f"_as_bool twins disagree for input {value!r}"
+
+    for value in (1.0, 0.5, 1e-10, 1e-300, 1e-320):
+        assert _log10_with_floor(value) == module._log10_with_floor(value), (
+            f"_log10_with_floor twins disagree for input {value!r}"
+        )
