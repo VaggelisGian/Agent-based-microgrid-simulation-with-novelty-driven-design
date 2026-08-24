@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="540pt" height="388.8pt" viewBox="0 0 540 388.8" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-08-23T20:05:41.993212</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.7, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 388.8 
+L 540 388.8 
+L 540 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 19.8072 91.044 
+L 121.0248 91.044 
+Q 127.44 91.044 127.44 84.6288 
+L 127.44 43.9992 
+Q 127.44 37.584 121.0248 37.584 
+L 19.8072 37.584 
+Q 13.392 37.584 13.392 43.9992 
+L 13.392 84.6288 
+Q 13.392 91.044 19.8072 91.044 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef2f7; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 19.8072 165.888 
+L 121.0248 165.888 
+Q 127.44 165.888 127.44 159.4728 
+L 127.44 122.4072 
+Q 127.44 115.992 121.0248 115.992 
+L 19.8072 115.992 
+Q 13.392 115.992 13.392 122.4072 
+L 13.392 159.4728 
+Q 13.392 165.888 19.8072 165.888 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef2f7; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 19.8072 240.732 
+L 121.0248 240.732 
+Q 127.44 240.732 127.44 234.3168 
+L 127.44 197.2512 
+Q 127.44 190.836 121.0248 190.836 
+L 19.8072 190.836 
+Q 13.392 190.836 13.392 197.2512 
+L 13.392 234.3168 
+Q 13.392 240.732 19.8072 240.732 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef2f7; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 19.8072 340.524 
+L 121.0248 340.524 
+Q 127.44 340.524 127.44 334.1088 
+L 127.44 293.4792 
+Q 127.44 287.064 121.0248 287.064 
+L 19.8072 287.064 
+Q 13.392 287.064 13.392 293.4792 
+L 13.392 334.1088 
+Q 13.392 340.524 19.8072 340.524 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef2f7; stroke-dasharray: 3.33,1.44; stroke-dashoffset: 0; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 161.298 351.216 
+L 378.702 351.216 
+Q 387.612 351.216 387.612 342.306 
+L 387.612 39.366 
+Q 387.612 30.456 378.702 30.456 
+L 161.298 30.456 
+Q 152.388 30.456 152.388 39.366 
+L 152.388 342.306 
+Q 152.388 351.216 161.298 351.216 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #fafafa; stroke: #222222; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 185.5332 117.774 
+L 374.0688 117.774 
+Q 380.484 117.774 380.484 111.3588 
+L 380.484 67.1652 
+Q 380.484 60.75 374.0688 60.75 
+L 185.5332 60.75 
+Q 179.118 60.75 179.118 67.1652 
+L 179.118 111.3588 
+Q 179.118 117.774 185.5332 117.774 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #ffffff; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 185.5332 197.964 
+L 374.0688 197.964 
+Q 380.484 197.964 380.484 191.5488 
+L 380.484 134.8812 
+Q 380.484 128.466 374.0688 128.466 
+L 185.5332 128.466 
+Q 179.118 128.466 179.118 134.8812 
+L 179.118 191.5488 
+Q 179.118 197.964 185.5332 197.964 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #ffffff; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 185.5332 249.642 
+L 374.0688 249.642 
+Q 380.484 249.642 380.484 243.2268 
+L 380.484 216.8532 
+Q 380.484 210.438 374.0688 210.438 
+L 185.5332 210.438 
+Q 179.118 210.438 179.118 216.8532 
+L 179.118 243.2268 
+Q 179.118 249.642 185.5332 249.642 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #ffffff; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 185.5332 340.524 
+L 374.0688 340.524 
+Q 380.484 340.524 380.484 334.1088 
+L 380.484 268.5312 
+Q 380.484 262.116 374.0688 262.116 
+L 185.5332 262.116 
+Q 179.118 262.116 179.118 268.5312 
+L 179.118 334.1088 
+Q 179.118 340.524 185.5332 340.524 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #fbf0e6; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 279.801 119.77614 
+Q 279.801 123.121821 279.801 125.461271 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 281.601 121.861271 
+L 279.801 125.461271 
+L 278.001 121.861271 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 279.801 199.964834 
+Q 279.801 204.200381 279.801 207.429697 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 281.601 203.829697 
+L 279.801 207.429697 
+L 278.001 203.829697 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 279.801 251.642834 
+Q 279.801 255.878381 279.801 259.107697 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 281.601 255.507697 
+L 279.801 259.107697 
+L 278.001 255.507697 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_14">
+    <path d="M 177.11673 301.32 
+Q 171.990148 301.32 166.863566 301.32 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 164.862 299.317072 
+Q 164.862 195.287951 164.862 91.258831 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 166.86327 89.262 
+Q 171.989852 89.262 176.110203 89.262 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 172.510203 87.462 
+L 176.110203 89.262 
+L 172.510203 91.062 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_17">
+    <path d="M 129.434744 64.456482 
+Q 139.915292 65.205092 149.392168 65.882012 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 145.929561 63.830097 
+L 149.392168 65.882012 
+L 145.673072 67.420948 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_18">
+    <path d="M 129.361654 141.489044 
+Q 139.912117 144.503462 149.495064 147.241447 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 146.528076 144.521708 
+L 149.495064 147.241447 
+L 145.53908 147.983194 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_19">
+    <path d="M 128.586597 214.146004 
+Q 139.914199 197.963715 150.664767 182.605762 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 147.125685 184.522765 
+L 150.664767 182.605762 
+L 150.07492 186.587229 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_20">
+    <path d="M 129.434744 313.936482 
+Q 139.915292 314.685092 149.392168 315.362012 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke-dasharray: 3.33,1.44; stroke-dashoffset: 0; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 145.929561 313.310097 
+L 149.392168 315.362012 
+L 145.673072 316.900948 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke-dasharray: 3.33,1.44; stroke-dashoffset: 0; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_21">
+    <path d="M 404.7192 105.3 
+L 520.1928 105.3 
+Q 526.608 105.3 526.608 98.8848 
+L 526.608 43.9992 
+Q 526.608 37.584 520.1928 37.584 
+L 404.7192 37.584 
+Q 398.304 37.584 398.304 43.9992 
+L 398.304 98.8848 
+Q 398.304 105.3 404.7192 105.3 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef7ee; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_22">
+    <path d="M 404.7192 176.58 
+L 520.1928 176.58 
+Q 526.608 176.58 526.608 170.1648 
+L 526.608 129.5352 
+Q 526.608 123.12 520.1928 123.12 
+L 404.7192 123.12 
+Q 398.304 123.12 398.304 129.5352 
+L 398.304 170.1648 
+Q 398.304 176.58 404.7192 176.58 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef7ee; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_23">
+    <path d="M 404.7192 258.552 
+L 520.1928 258.552 
+Q 526.608 258.552 526.608 252.1368 
+L 526.608 200.8152 
+Q 526.608 194.4 520.1928 194.4 
+L 404.7192 194.4 
+Q 398.304 194.4 398.304 200.8152 
+L 398.304 252.1368 
+Q 398.304 258.552 404.7192 258.552 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef7ee; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_24">
+    <path d="M 404.7192 340.524 
+L 520.1928 340.524 
+Q 526.608 340.524 526.608 334.1088 
+L 526.608 282.7872 
+Q 526.608 276.372 520.1928 276.372 
+L 404.7192 276.372 
+Q 398.304 276.372 398.304 282.7872 
+L 398.304 334.1088 
+Q 398.304 340.524 404.7192 340.524 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #eef7ee; stroke: #555555; stroke-width: 0.9; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_25">
+    <path d="M 389.61414 71.442 
+Q 392.959821 71.442 395.299271 71.442 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 391.699271 69.642 
+L 395.299271 71.442 
+L 391.699271 73.242 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_26">
+    <path d="M 389.61414 149.85 
+Q 392.959821 149.85 395.299271 149.85 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 391.699271 148.05 
+L 395.299271 149.85 
+L 391.699271 151.65 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_27">
+    <path d="M 462.456 107.296919 
+Q 462.456 114.209859 462.456 120.451979 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.6; stroke-linecap: round"/>
+    <path d="M 464.256 116.851979 
+L 462.456 120.451979 
+L 460.656 116.851979 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.6; stroke-linecap: round"/>
+   </g>
+   <g id="patch_28">
+    <path d="M 462.456 178.576919 
+Q 462.456 185.489859 462.456 191.396569 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 464.256 187.796569 
+L 462.456 191.396569 
+L 460.656 187.796569 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="patch_29">
+    <path d="M 462.456 260.548919 
+Q 462.456 267.461859 462.456 273.368569 
+" clip-path="url(#pe14c8442ac)" style="fill: none; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+    <path d="M 464.256 269.768569 
+L 462.456 273.368569 
+L 460.656 269.768569 
+z
+" clip-path="url(#pe14c8442ac)" style="fill: #222222; stroke: #222222; stroke-width: 0.9; stroke-linecap: round"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 10px; font-family: 'Times New Roman'; text-anchor: middle; fill: #222222" x="70.416" y="14.418" transform="rotate(-0 70.416 14.418)">Είσοδοι</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(54.577875 53.227125)">Ρυθμίσεις</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(38.98225 61.897125)">config/default.yaml</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(38.3685 70.567125)">+ σενάρια (extends)</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(16.449125 79.222125)">σπόρος, k, ablation, broker_count</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(40.891625 134.185625)">Ηλιακή παραγωγή</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(18.402875 142.855625)">PVGIS seriescalc, Θεσσαλονίκη</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(27.13225 151.510625)">έτος 2020, ωριαία (1 kWp)</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(47.115375 209.020875)">Σειρά ζήτησης</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(31.829125 217.690875)">συνθετική (προεπιλογή)</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(24.63475 226.360875)">ή OPSD (μετρημένη, opt-in)</text>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(27.78975 307.038375)">Έλεγχοι και golden master</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(21.27475 315.708375)">tests/ (pytest, 461 + 3 skipped)</text>
+    <text style="font-size: 8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(24.421 324.378375)">μεταλλάξεις, ντετερμινισμός</text>
+   </g>
+   <g id="text_6">
+    <text style="font-weight: 700; font-size: 10px; font-family: 'Times New Roman'; text-anchor: middle; fill: #222222" x="270" y="44.20455" transform="rotate(-0 270 44.20455)">MicrogridModel (Mesa 3.5.1), ωριαίος βρόχος step()</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(219.905883 78.864539)">1. Πάροχοι (brokers), σταθεροί κανόνες</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(198.430687 86.992664)">ρυθμιζόμενος (επίπεδος, εποχικός) | ασταθής χαμηλού</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(191.310961 95.120789)">κόστους (AR(1), Student-t) | premium πράσινος (επίπεδος)</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(188.968969 103.248914)">προσφορά = βασική τιμή + επιβάρυνση προηγούμενης ώρας</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(214.01018 148.753477)">2. Πληθυσμός 200 πρακτόρων (D1 έως D4)</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(183.115453 156.881602)">160 καταναλωτές, 40 παραγωγοί-καταναλωτές (PV + μπαταρία)</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(189.915844 165.009727)">προφίλ: ευαίσθητοι στην τιμή / στη σταθερότητα / πράσινοι</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(196.815844 173.137852)">επιλογή παρόχου με αδράνεια, λεξικογραφικοί κανόνες</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(182.898656 181.265977)">αναβολή ζήτησης (D7), αντιδραστική αποστολή μπαταρίας (D3)</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(240.475805 223.713633)">3. Συνάθροιση τροφοδότη</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(204.95393 231.827695)">καθαρή εισαγωγή = Σ (ζήτηση - PV - εκφόρτιση),</text>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; fill: #222222" transform="translate(241.42268 239.95582)">συνολικά και ανά πάροχο</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; fill: #222222" transform="translate(197.545398 287.244117)">4-6. Μηχανισμός χωρητικότητας (D6/D7, προαιρετικός)</text>
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; fill: #222222" transform="translate(211.091461 295.155492)">κατώφλι μ + k·σ (παράθυρο 168 h), υπέρβαση,</text>
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; fill: #222222" transform="translate(188.502523 303.066867)">χρέωση 0.15 EUR/kWh υπέρβασης, επιμερισμός κατά μερίδιο</text>
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; fill: #222222" transform="translate(206.236391 310.978242)">κανάλι P&amp;L: χρέωση λογιστικού βιβλίου παρόχου</text>
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; fill: #222222" transform="translate(172.995156 318.889617)">κανάλι τιμολόγησης: επιβάρυνση = passthrough · μερίδιο (επόμενη ώρα)</text>
+   </g>
+   <g id="text_11">
+    <g id="patch_30">
+     <path d="M 303.835156 127.314648 
+L 362.686844 127.314648 
+L 362.686844 118.925352 
+L 303.835156 118.925352 
+z
+" style="fill: #ffffff"/>
+    </g>
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; text-anchor: middle; fill: #222222" x="333.261" y="124.863445" transform="rotate(-0 333.261 124.863445)">τιμές + επιβάρυνση</text>
+   </g>
+   <g id="text_12">
+    <g id="patch_31">
+     <path d="M 295.380055 208.395648 
+L 392.525945 208.395648 
+L 392.525945 200.006352 
+L 295.380055 200.006352 
+z
+" style="fill: #ffffff"/>
+    </g>
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; text-anchor: middle; fill: #222222" x="343.953" y="205.944445" transform="rotate(-0 343.953 205.944445)">καθαρή εισαγωγή ανά πράκτορα</text>
+   </g>
+   <g id="text_13">
+    <g id="patch_32">
+     <path d="M 295.79182 260.070227 
+L 392.11418 260.070227 
+L 392.11418 251.687773 
+L 295.79182 251.687773 
+z
+" style="fill: #ffffff"/>
+    </g>
+    <text style="font-size: 7.3px; font-family: 'Times New Roman'; text-anchor: middle; fill: #222222" x="343.953" y="257.619023" transform="rotate(-0 343.953 257.619023)">I_t και συνεισφορές ανά πάροχο</text>
+   </g>
+   <g id="text_14">
+    <g id="patch_33">
+     <path d="M 168.034747 277.447344 
+L 168.034747 111.352656 
+L 160.263653 111.352656 
+L 160.263653 277.447344 
+z
+" style="fill: #fafafa"/>
+    </g>
+    <text style="font-size: 7px; font-family: 'Times New Roman'; fill: #222222" transform="translate(165.824278 276.747344) rotate(-90)">επιβάρυνση u_b, επόμενη ώρα (μόνο κανάλι τιμολόγησης)</text>
+   </g>
+   <g id="text_15">
+    <text style="font-weight: 700; font-size: 10px; font-family: 'Times New Roman'; text-anchor: middle; fill: #222222" x="462.456" y="14.418" transform="rotate(-0 462.456 14.418)">Έξοδοι</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(425.360297 56.403234)">Μετρικές ανά εκτέλεση</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(416.553 64.856484)">1 μέσο κόστος ανά πράκτορα</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(419.978297 73.309734)">2 κατανομή φορτίου (HHI)</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(401.544703 81.762984)">3 σταθερότητα τροφοδότη (CoV, PAR)</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(400.935937 90.201609)">4 αυτάρκεια παραγωγών-καταναλωτών</text>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(438.184594 139.030547)">Στήλες ελέγχου</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(407.94375 147.483797)">ποσοστό ενεργοποίησης, συνολική</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(400.892062 155.937047)">χρέωση, μέση επιβάρυνση ανά πάροχο,</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(398.545969 164.390297)">αναβληθείσα ενέργεια, αλλαγές παρόχου</text>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(447.295359 215.655328)">Σαρώσεις</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(403.463625 224.108578)">scripts/run_*.py (pool 16 διεργασιών,</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(434.898234 232.561828)">επανεκκινήσιμες)</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(409.174078 241.015078)">results/*.parquet, 4630 εκτελέσεις</text>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(448.224656 297.641953)">Ανάλυση</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(410.234391 306.080578)">scripts/analyze_*.py: ζευγαρωτές</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(411.604875 314.533828)">συγκρίσεις, Holm/BH, bootstrap</text>
+    <text style="font-size: 7.8px; font-family: 'Times New Roman'; fill: #222222" transform="translate(412.659703 322.987078)">results/*.csv, results/plots/*.png</text>
+   </g>
+   <g id="text_20">
+    <g id="patch_34">
+     <path d="M 422.737055 185.520427 
+L 502.174945 185.520427 
+L 502.174945 176.905973 
+L 422.737055 176.905973 
+z
+" style="fill: #ffffff"/>
+    </g>
+    <text style="font-size: 7.5px; font-family: 'Times New Roman'; text-anchor: middle; fill: #222222" x="462.456" y="183.002067" transform="rotate(-0 462.456 183.002067)">μία γραμμή ανά εκτέλεση</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pe14c8442ac">
+   <rect x="2.7" y="1.944" width="534.6" height="384.912"/>
+  </clipPath>
+ </defs>
+</svg>
