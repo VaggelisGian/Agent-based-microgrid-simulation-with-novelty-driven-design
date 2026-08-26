@@ -139,7 +139,7 @@ def make_run(text: str, bold=False, italic=False, code=False, lang: str | None =
     if italic:
         sub(rpr, "w:i")
         sub(rpr, "w:iCs")
-    if noproof:
+    if noproof or code:
         sub(rpr, "w:noProof")
     if size:
         sub(rpr, "w:sz", {"w:val": size})
@@ -364,14 +364,128 @@ def figure_para(rid_png: str, rid_svg: str | None, px_w: int, px_h: int, width_f
     return p
 
 
+NUMERIC_CELL_RE = re.compile(r"[-+]?[0-9][0-9.,e+\-% ]*")
+GREEK_CHAR_RE = re.compile("[Ͱ-Ͽἀ-῿]")
+PUNCT_EM = {" ": 0.25, ".": 0.25, ",": 0.25, "%": 0.85, "+": 0.57, "-": 0.34, "=": 0.57,
+            "_": 0.50, "(": 0.34, ")": 0.34, "/": 0.28, ":": 0.28, ";": 0.28}
+CELL_PAD_TWIPS = 260   # 2 x 108 twip TableGrid cell margins plus rounding slack
+TOKEN_CAPS_EM = (None, 19.5, 14.5)  # uncapped tokens first; relax before accepting mid-word wraps
+NATURAL_CAP_EM = 24.0  # a single cell line never claims more than this
+
+
+def text_em(text: str, bold: bool = False) -> float:
+    """Rendered width of a Times New Roman run in ems, from the font's advance widths
+    (digits 0.50, Greek lower ~0.50, Greek upper 0.72, bold about 7 percent wider)."""
+    total = 0.0
+    for c in text:
+        o = ord(c)
+        if c.isdigit():
+            total += 0.50
+        elif 0x0391 <= o <= 0x03A9 or c in "ΆΈΉΊΌΎΏΪΫ":
+            total += 0.72
+        elif 0x03B1 <= o <= 0x03C9 or c in "άέήίόύώϊϋΐΰς":
+            total += 0.50
+        elif c.isalpha():
+            total += 0.70 if c.isupper() else 0.48
+        else:
+            total += PUNCT_EM.get(c, 0.60)
+    return total * (1.07 if bold else 1.0)
+
+
+def cell_segments(txt: str) -> list[tuple[str, bool]]:
+    """Split a markdown cell into (text, is_code) segments; bold markers are dropped."""
+    out = []
+    for j, part in enumerate(re.split(r"`([^`]*)`", txt)):
+        if part:
+            out.append((part if j % 2 else part.replace("**", ""), bool(j % 2)))
+    return out
+
+
+def cell_metrics(txt: str, bold: bool, numeric: bool) -> tuple[float, float]:
+    """(widest unbreakable token, full line) of one cell in ems; code runs use the
+    Consolas advance of 0.55 em per character. A numeric cell must never wrap at all,
+    so its token width is the whole cell."""
+    segs = cell_segments(txt)
+    full = sum(0.55 * len(t) if code else text_em(t, bold) for t, code in segs)
+    if numeric:
+        return full, full
+    token = 0.0
+    for t, code in segs:
+        for tok in t.split():
+            token = max(token, 0.55 * len(tok) if code else text_em(tok, bold))
+    return token, full
+
+
+def is_numeric_cell(txt: str) -> bool:
+    return bool(NUMERIC_CELL_RE.fullmatch(txt.strip()))
+
+
+def is_stat_cell(txt: str) -> bool:
+    """A short latin-only cell carrying a digit, e.g. 'd_z = -22.25, p = 7.4e-41'. Word
+    breaks lines after any hyphen that fits, even inside 7.4e-41, so such a cell must
+    get its full one-line width rather than a per-token floor."""
+    s = txt.strip()
+    return (len(s) <= 32 and any(c.isdigit() for c in s)
+            and bool(re.fullmatch(r"[A-Za-z0-9_ .,%+=()\-]+", s)))
+
+
+def add_noproof(r_: etree._Element) -> None:
+    rpr = r_.find(qn("w:rPr"))
+    if rpr is None:
+        rpr = el("w:rPr")
+        r_.insert(0, rpr)
+    if rpr.find(qn("w:noProof")) is not None:
+        return
+    head = {"rFonts", "b", "bCs", "i", "iCs"}
+    at = 0
+    for child in rpr:
+        if etree.QName(child).localname not in head:
+            break
+        at += 1
+    rpr.insert(at, el("w:noProof"))
+
+
 def table_block(header: list[str], rows: list[list[str]], ctx: Context) -> etree._Element:
     ncol = len(header)
-    size = 20 if ncol <= 5 else 18
-    # column widths proportional to the longest cell, with a floor
-    lens = [max(len(h), *(len(r[i]) if i < len(r) else 0 for r in rows)) for i, h in enumerate(header)]
-    lens = [max(6, min(l, 40)) for l in lens]
-    total = sum(lens)
-    widths = [int(TEXT_WIDTH_TWIPS * l / total) for l in lens]
+    # fixed layout grid: every column is floored at the width of its widest unbreakable
+    # token (whole cell for numeric and statistic cells, longest word for headers and
+    # text), so numbers and header words never wrap mid word; the remaining slack goes to
+    # the text columns in proportion to how far each still is from its natural one-line
+    # width. Preference ladder: whole tokens at 10 pt, whole tokens at 9 pt, then
+    # progressively capped code tokens, and only then scaling with mid-word wraps.
+    sizes = (20, 18) if ncol <= 5 else (18,)
+    for cap in TOKEN_CAPS_EM:
+        for size in sizes:
+            em_tw = size * 10  # twips per em at this size (size is in half points)
+            min_w = [0] * ncol
+            nat_w = [0] * ncol
+            for i in range(ncol):
+                cells = [(header[i], True)] + [(r[i] if i < len(r) else "", False) for r in rows]
+                for txt, is_hdr in cells:
+                    nowrap = (is_numeric_cell(txt) or is_stat_cell(txt)) and not is_hdr
+                    token, full = cell_metrics(txt, is_hdr, nowrap)
+                    if cap is not None and not (is_hdr or nowrap):
+                        token = min(token, cap)
+                    min_w[i] = max(min_w[i], round(token * em_tw))
+                    nat_w[i] = max(nat_w[i], round(min(full, NATURAL_CAP_EM) * em_tw))
+            min_w = [w + CELL_PAD_TWIPS for w in min_w]
+            nat_w = [max(w + CELL_PAD_TWIPS, m) for w, m in zip(nat_w, min_w)]
+            if sum(min_w) < TEXT_WIDTH_TWIPS:
+                break
+        if sum(min_w) < TEXT_WIDTH_TWIPS:
+            break
+    if sum(min_w) >= TEXT_WIDTH_TWIPS:
+        # overfull even at the guaranteed minima: scale down and accept mid word wraps
+        widths = [int(TEXT_WIDTH_TWIPS * w / sum(min_w)) for w in min_w]
+        print(f"warning: table needs {sum(min_w)} twips at minimum widths: {header}", file=sys.stderr)
+    else:
+        slack = TEXT_WIDTH_TWIPS - sum(min_w)
+        want = [n - m for n, m in zip(nat_w, min_w)]
+        need = sum(want)
+        if need:
+            widths = [m + int(slack * w / need) for m, w in zip(min_w, want)]
+        else:
+            widths = [m + slack // ncol for m in min_w]
     widths[-1] += TEXT_WIDTH_TWIPS - sum(widths)
     tbl = el("w:tbl")
     tpr = sub(tbl, "w:tblPr")
@@ -397,8 +511,12 @@ def table_block(header: list[str], rows: list[list[str]], ctx: Context) -> etree
             tcpr = sub(tc, "w:tcPr")
             sub(tcpr, "w:tcW", {"w:w": widths[i], "w:type": "dxa"})
             sub(tcpr, "w:vAlign", {"w:val": "center"})
-            numeric = bool(re.fullmatch(r"[-+]?[0-9][0-9.,e+\-% ]*", txt.strip())) and not is_header
+            numeric = is_numeric_cell(txt) and not is_header
             runs = inline_runs(txt, ctx, base_size=size)
+            if txt.strip() and not GREEK_CHAR_RE.search(txt):
+                # identifiers and statistics, no Greek text: keep Word proofing quiet
+                for r_ in runs:
+                    add_noproof(r_)
             if is_header:
                 for r_ in runs:
                     rpr = r_.find(qn("w:rPr"))
@@ -635,7 +753,7 @@ def set_sect_type(sectpr: etree._Element, kind: str):
 
 
 def sectpr_for(pkg: Package, base: etree._Element, even_text: str, odd_text: str, start_page: int | None,
-               page_fmt: str | None = None) -> etree._Element:
+               page_fmt: str | None = None, start_type: str = "nextPage") -> etree._Element:
     sp = copy.deepcopy(base)
     for ref in list(sp):
         if etree.QName(ref).localname in ("headerReference", "footerReference", "pgNumType", "type"):
@@ -645,7 +763,7 @@ def sectpr_for(pkg: Package, base: etree._Element, even_text: str, odd_text: str
         el("w:headerReference", {"w:type": "default", "r:id": pkg.add_header_footer("header", header_xml(odd_text, True))}),
         el("w:footerReference", {"w:type": "even", "r:id": "rId31"}),   # template page-number footers
         el("w:footerReference", {"w:type": "default", "r:id": "rId17"}),
-        el("w:type", {"w:val": "nextPage"}),
+        el("w:type", {"w:val": start_type}),
     ]
     for i, r_ in enumerate(refs):
         sp.insert(i, r_)
@@ -903,8 +1021,12 @@ class Builder:
             self.prelabel(blocks, label)
             new_body.append(para("Heading1", inline_runs(title, self.ctx)))
             new_body.extend(self.render_blocks(blocks, label, False))
+            # chapter 1 restarts the arabic folio at 1; with the template's even and odd
+            # headers Word aligns folio 1 to a recto anyway (inserting a folio-less verso
+            # when the front matter ends on an odd sheet), so declare the recto start
             sp = sectpr_for(self.pkg, base_sect, f"Κεφάλαιο {n}", title, 1 if n == 1 else None,
-                            "decimal" if n == 1 else None)
+                            "decimal" if n == 1 else None,
+                            start_type="oddPage" if n == 1 else "nextPage")
             new_body.append(para(None, [], spacing={"after": 0}) )
             new_body[-1].find(qn("w:pPr")).append(sp)
             self.stats["chapters"].append({"n": n, "title": title, "file": f.name})
